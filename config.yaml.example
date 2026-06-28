@@ -1,0 +1,44 @@
+# Plural Star Node — example configuration
+# Copy to config.yaml and edit, or let the node generate one on first run.
+
+# Node identity. Ed25519 key, generated on first run if absent.
+keypair_path: "./node.key"
+
+# Network mode: "public" | "private" | "custom_public"
+network_mode: "public"
+
+# Private network only. 32-byte PSK file, required if network_mode = private.
+psk_path: "./network.psk"
+
+# Custom public network only. Namespacing string, required if network_mode = custom_public.
+network_id: ""
+
+# Bootstrap peers (multiaddr list).
+# Public mode: well-known Plural Star bootstrap nodes are used as fallback if empty.
+# Private / custom_public: at least one peer is required.
+bootstrap_peers: []
+
+# Optional: hosted public-network directory URL (public / custom_public modes).
+# Fetched on startup as a bootstrap for network-card discovery. Leave empty to
+# rely on gossip discovery only, or to use the compiled-in default if one is set.
+directory_url: ""
+
+# API server.
+api_host: "127.0.0.1"   # bind address; use 0.0.0.0 to let the app reach this node over the network
+api_port: 7523
+api_token: ""           # required; auto-generated on first run if empty
+
+# libp2p listen addresses.
+listen_addrs:
+  - "/ip4/0.0.0.0/tcp/4001"
+  - "/ip4/0.0.0.0/udp/4001/quic-v1"
+
+# Optional: announce external address if behind static NAT.
+announce_addrs: []
+
+# Whether this node forwards traffic for others.
+relay_enabled: true
+
+# Connection limits.
+max_peers: 100
+max_app_connections: 50

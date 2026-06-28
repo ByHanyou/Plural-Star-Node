@@ -1,0 +1,17 @@
+# Build output
+/plural-star-node
+/plural-star-node-*
+/plural-star-node.exe
+/gencard
+/dist/
+
+# Runtime-generated, host-specific, and secret files
+config.yaml
+node.key
+network.psk
+networks.db
+*.key
+
+# OS / editor noise
+.DS_Store
+*.swp

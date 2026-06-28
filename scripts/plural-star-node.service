@@ -1,0 +1,27 @@
+[Unit]
+Description=Plural Star Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/plural-star-node --config /etc/plural-star-node/config.yaml
+Restart=on-failure
+RestartSec=5s
+User=plural-star
+WorkingDirectory=/var/lib/plural-star-node
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/plural-star-node /etc/plural-star-node
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
