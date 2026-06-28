@@ -132,6 +132,50 @@ nssm start PluralStarNode
 
 Or create a Task Scheduler task that runs `plural-star-node.exe --config config.yaml` with the trigger "At startup."
 
+## Exposing a public node (port forwarding & dynamic DNS)
+
+A public bootstrap node must be reachable from the internet at a stable address.
+
+**1. Forward the port.** On your router, forward **TCP and UDP 4001** to the node's LAN IP.
+
+**2. Announce your public address.** Set `announce_addrs` in `config.yaml` to your public IP — this is what other nodes use to reach you, and it also stops the node advertising local-only addresses:
+
+```yaml
+announce_addrs:
+  - "/ip4/<your-public-ip>/tcp/4001"
+  - "/ip4/<your-public-ip>/udp/4001/quic-v1"
+```
+
+Find your public IPv4 with `curl -4 ifconfig.me` (Windows: `curl.exe -4 ifconfig.me`). If your router's WAN IP differs from that result, your ISP uses CGNAT and port forwarding won't expose you.
+
+**3. Use a hostname so the address survives IP changes.** Most home IPs are dynamic. Register a free dynamic-DNS hostname with [deSEC](https://desec.io) (e.g. `yourname.dedyn.io`) and copy the token shown at sign-up. Point it at your IP once:
+
+```sh
+curl --user yourname.dedyn.io:<your-token> "https://update.dedyn.io/?myipv4=<your-ip>&myipv6=preserve"
+```
+
+Keep it updated automatically every 10 minutes — Linux/macOS (cron):
+
+```sh
+*/10 * * * * curl -4 --user yourname.dedyn.io:<your-token> "https://update.dedyn.io/?myipv6=preserve"
+```
+
+Windows (Task Scheduler):
+
+```bat
+schtasks /create /tn "deSEC DDNS" /tr "curl.exe -4 --user yourname.dedyn.io:<your-token> \"https://update.dedyn.io/?myipv6=preserve\"" /sc minute /mo 10 /f
+```
+
+Then announce the hostname instead of the raw IP:
+
+```yaml
+announce_addrs:
+  - "/dns4/yourname.dedyn.io/tcp/4001"
+  - "/dns4/yourname.dedyn.io/udp/4001/quic-v1"
+```
+
+Restart the node. Your stable bootstrap address — for other nodes' `bootstrap_peers`, a directory card, or `DefaultBootstrapPeers` — is then `/dns4/yourname.dedyn.io/tcp/4001/p2p/<your-peer-id>`.
+
 ## Hosting the public directory
 
 The public-network directory is a static JSON file — an array of signed network cards — so it can be hosted anywhere static, including **GitHub Pages**. Nodes fetch it on startup (set `directory_url` in config), verify each card's signature, cache valid ones, and serve them on `/networks`. Networks also propagate node-to-node over gossip.

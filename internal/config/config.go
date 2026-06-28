@@ -76,8 +76,8 @@ func Default() *Config {
 		},
 		AnnounceAddrs:     []string{},
 		RelayEnabled:      true,
-		MaxPeers:          100,
-		MaxAppConnections: 50,
+		MaxPeers:          200,
+		MaxAppConnections: 5000,
 	}
 }
 

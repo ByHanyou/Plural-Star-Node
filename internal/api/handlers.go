@@ -149,6 +149,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing or invalid peer_id query parameter")
 		return
 	}
+	s.mu.RLock()
+	atCapacity := s.cfg.MaxAppConnections > 0 && len(s.clients) >= s.cfg.MaxAppConnections
+	s.mu.RUnlock()
+	if atCapacity {
+		writeError(w, http.StatusServiceUnavailable, "max_app_connections reached")
+		return
+	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return // Upgrade already wrote an error response

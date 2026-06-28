@@ -19,7 +19,9 @@ const GlobalScope = "global"
 //
 // TODO: populate with the real deployed bootstrap node multiaddrs before public
 // release, e.g. "/ip4/<ip>/tcp/4001/p2p/<peerid>".
-var DefaultBootstrapPeers = []string{}
+var DefaultBootstrapPeers = []string{
+	"/dns4/pluralstar.dedyn.io/tcp/4001/p2p/12D3KooWL4A25M2sWt1HoFY3r8hWn2idbc4yVdsdBqpFitRTNyfz",
+}
 
 // Scope returns the network scope label ("global" or the custom network_id).
 func Scope(cfg *config.Config) string {
