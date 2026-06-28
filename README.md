@@ -6,13 +6,19 @@ This is a separate program from the Plural Star app. It is built directly on [go
 
 ## Related projects & links
 
-[![Support PS](https://img.buymeacoffee.com/button-api/?text=Support+PS&emoji=%E2%98%95&slug=PluralSpace&button_colour=151929&font_colour=ffffff&font_family=Cookie&outline_colour=ffffff&coffee_colour=FFDD00)](https://www.buymeacoffee.com/PluralStar)
+<p align="center">
+  <a href="https://www.buymeacoffee.com/PluralStar">
+    <img src="https://img.buymeacoffee.com/button-api/?text=Support+PS&amp;emoji=%E2%98%95&amp;slug=PluralStar&amp;button_colour=151929&amp;font_colour=ffffff&amp;font_family=Cookie&amp;outline_colour=ffffff&amp;coffee_colour=FFDD00" alt="Support Plural Star on Buy Me a Coffee" />
+  </a>
+  &nbsp;
+  <a href="https://discord.gg/FFQw33cu8m">
+    <img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord" />
+  </a>
+</p>
 
-- **Plural Star** (the app this node serves) — [Website](https://thehanyou.github.io/Plural-Star/) · [GitHub](https://github.com/TheHanyou/Plural-Star) · [App Store](https://apps.apple.com/in/app/plural-star/id6763964266) · [Google Play](https://play.google.com/store/apps/details?id=com.pluralspace.app)
-- **Plural Star Desktop** — [GitHub](https://github.com/TheHanyou/Plural-Star-Desktop) · [Latest release](https://github.com/TheHanyou/Plural-Star-Desktop/releases/latest)
-- **Plural Star Node** (this repo) — [GitHub](https://github.com/ByHanyou/Plural-Star-Node)
-- **Community** — [Discord](https://discord.gg/FFQw33cu8m) · [Reddit](https://www.reddit.com/r/PluralStar/)
-- **Support development** — [Buy Me a Coffee](https://www.buymeacoffee.com/PluralStar)
+- **Plural Star** (the app this node serves) — [Website](https://byhanyou.github.io/Plural-Star/) · [GitHub](https://github.com/ByHanyou/Plural-Star) · [App Store](https://apps.apple.com/in/app/plural-star/id6763964266) · [Google Play](https://play.google.com/store/apps/details?id=com.pluralspace.app)
+- **Plural Star Desktop** - [GitHub](https://github.com/ByHanyou/Plural-Star-Desktop) · [Latest release](https://github.com/ByHanyou/Plural-Star-Desktop/releases/latest)
+- **Community** - [Reddit](https://www.reddit.com/r/PluralStar/)
 
 ## What it does
 
