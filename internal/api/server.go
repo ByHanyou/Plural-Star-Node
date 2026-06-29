@@ -40,6 +40,8 @@ type Server struct {
 	mu      sync.RWMutex
 	clients map[*wsClient]struct{}
 	appPeer peer.ID // most recently registered local app, used as /send sender
+
+	rv *rendezvousStore // in-memory code -> identity discovery (no disk)
 }
 
 // NewServer constructs the API server. Call SetPing and SetRelay before Start.
@@ -54,6 +56,7 @@ func NewServer(cfg *config.Config, configPath string, h host.Host, scope string)
 			CheckOrigin: func(*http.Request) bool { return true },
 		},
 		clients: make(map[*wsClient]struct{}),
+		rv:      newRendezvousStore(),
 	}
 }
 
@@ -78,6 +81,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/invite/generate", s.authed(s.handleInviteGenerate))
 	mux.HandleFunc("/invite/accept", s.authed(s.handleInviteAccept))
 	mux.HandleFunc("/config", s.authed(s.handleConfig))
+	mux.HandleFunc("/rendezvous/register", s.authed(s.handleRendezvousRegister))
+	mux.HandleFunc("/rendezvous/lookup", s.authed(s.handleRendezvousLookup))
 	mux.HandleFunc("/ws", s.authed(s.handleWS))
 	return mux
 }

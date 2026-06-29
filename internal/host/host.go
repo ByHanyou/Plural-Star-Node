@@ -148,6 +148,9 @@ func ConnectBootstrap(ctx context.Context, h host.Host, addrs []string) (int, er
 	connected := 0
 	var firstErr error
 	for _, ai := range infos {
+		if ai.ID == h.ID() {
+			continue // never bootstrap to ourselves (this node may be in the default list)
+		}
 		dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if cErr := h.Connect(dialCtx, ai); cErr != nil {
 			if firstErr == nil {

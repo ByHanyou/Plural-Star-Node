@@ -90,13 +90,9 @@ func Load(path string) (cfg *Config, firstRun bool, err error) {
 		if !os.IsNotExist(readErr) {
 			return nil, false, fmt.Errorf("read config %q: %w", path, readErr)
 		}
-		// First run: generate defaults + token, persist.
+		// First run: write defaults and run open (no token) by default. An
+		// operator who wants auth can set api_token in the generated config.
 		cfg = Default()
-		token, tErr := generateToken()
-		if tErr != nil {
-			return nil, false, tErr
-		}
-		cfg.APIToken = token
 		if err := Save(cfg, path); err != nil {
 			return nil, false, fmt.Errorf("write initial config %q: %w", path, err)
 		}
@@ -111,19 +107,8 @@ func Load(path string) (cfg *Config, firstRun bool, err error) {
 		return nil, false, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
-	// An existing config with no token gets one generated and written back.
-	if cfg.APIToken == "" {
-		token, tErr := generateToken()
-		if tErr != nil {
-			return nil, false, tErr
-		}
-		cfg.APIToken = token
-		firstRun = true
-		if err := Save(cfg, path); err != nil {
-			return nil, false, fmt.Errorf("persist generated token to %q: %w", path, err)
-		}
-	}
-
+	// An empty api_token is allowed and means open mode (no auth); it is not
+	// auto-filled, so the operator's choice to run open is respected.
 	if err := cfg.Validate(); err != nil {
 		return nil, false, err
 	}
@@ -163,9 +148,7 @@ func (c *Config) Validate() error {
 	if c.APIPort <= 0 || c.APIPort > 65535 {
 		return fmt.Errorf("api_port %d out of range", c.APIPort)
 	}
-	if c.APIToken == "" {
-		return fmt.Errorf("api_token is required")
-	}
+	// api_token is optional: empty means the API runs in open mode (no auth).
 	if len(c.ListenAddrs) == 0 {
 		return fmt.Errorf("at least one listen_addr is required")
 	}

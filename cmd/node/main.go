@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command node is the Plural Star Node Network relay binary.
 package main
 
 import (
@@ -23,26 +22,24 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 )
 
-// node is the running coordinator: it owns the libp2p host and the subsystems
-// assembled on top of it as each phase is wired in.
 type node struct {
 	cfg   *config.Config
 	h     host.Host
 	dht   *dht.IpfsDHT
 	ps    *pubsub.PubSub
 	rd    *drouting.RoutingDiscovery
-	relay    *relay.Manager
-	ping     *ping.Manager
-	api      *api.Server
+	relay *relay.Manager
+	ping  *ping.Manager
+	api   *api.Server
 	networks *network.Store
 }
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config.yaml")
 	flag.Parse()
-
 	if err := run(*configPath); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
@@ -117,8 +114,6 @@ func run(configPath string) error {
 		log.Printf("mDNS LAN discovery started")
 	}
 
-	// App API + supporting managers. The server is created first so the relay
-	// and ping managers can route their events to its WebSocket clients.
 	srv := api.NewServer(cfg, configPath, h, network.Scope(cfg))
 	n.api = srv
 
@@ -134,8 +129,6 @@ func run(configPath string) error {
 	srv.SetRelay(mgr)
 	log.Printf("relay protocol %s registered", relay.RelayProtocol)
 
-	// Public networks gossip and cache signed network cards on the global
-	// discovery topic; private networks never participate.
 	if cfg.NetworkMode != config.ModePrivate {
 		store, sErr := network.OpenStore(network.NetworkDBDefault)
 		if sErr != nil {
@@ -174,20 +167,78 @@ func run(configPath string) error {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	if peers := network.BootstrapPeers(cfg); len(peers) > 0 {
-		connected, bErr := psnhost.ConnectBootstrap(ctx, h, peers)
-		log.Printf("connected to %d/%d bootstrap peers", connected, len(peers))
+	bootstrapPeers := network.BootstrapPeers(cfg)
+	if len(bootstrapPeers) > 0 {
+		connected, bErr := psnhost.ConnectBootstrap(ctx, h, bootstrapPeers)
+		log.Printf("initial bootstrap: connected to %d/%d peers", connected, len(bootstrapPeers))
 		if bErr != nil {
-			log.Printf("bootstrap (partial): %v", bErr)
+			log.Printf("initial bootstrap partial: %v", bErr)
 		}
 	} else if cfg.NetworkMode == config.ModePublic {
-		log.Printf("warning: no bootstrap peers configured and no defaults compiled in")
+		log.Printf("warning: no bootstrap peers")
+	}
+
+	if len(bootstrapPeers) > 0 {
+		go persistentReconnectLoop(ctx, h, bootstrapPeers)
+	}
+
+	go monitorConnections(ctx, h)
+
+	// Single-node self-advertise for testing
+	if n.rd != nil {
+		go singleNodeAdvertise(ctx, n.rd, network.DHTPrefix(cfg))
 	}
 
 	log.Printf("node running; press Ctrl-C to stop")
 	<-ctx.Done()
 	log.Printf("shutting down")
 	return nil
+}
+
+func persistentReconnectLoop(ctx context.Context, h host.Host, bootstrapPeers []string) {
+	ticker := time.NewTicker(90 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			connected, err := psnhost.ConnectBootstrap(ctx, h, bootstrapPeers)
+			if connected > 0 {
+				log.Printf("reconnect success: %d bootstrap peers", connected)
+			} else if err != nil {
+				log.Printf("reconnect failed: %v", err)
+			}
+		}
+	}
+}
+
+func monitorConnections(ctx context.Context, h host.Host) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			conns := h.Network().Conns()
+			log.Printf("active libp2p connections: %d", len(conns))
+		}
+	}
+}
+
+func singleNodeAdvertise(ctx context.Context, rd *drouting.RoutingDiscovery, rendezvous string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			dutil.Advertise(ctx, rd, rendezvous)
+			log.Printf("single-node: re-advertised on %s", rendezvous)
+		}
+	}
 }
 
 func printFirstRun(configPath, token string) {
