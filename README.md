@@ -136,7 +136,7 @@ Or create a Task Scheduler task that runs `plural-star-node.exe --config config.
 
 A public bootstrap node must be reachable from the internet at a stable address.
 
-**1. Forward the port.** On your router, forward **TCP and UDP 4001** to the node's LAN IP.
+**1. Forward the port.** On your router, forward **TCP and UDP 4001** and **TCP 7523** to the node's LAN IP.
 
 **2. Announce your public address.** Set `announce_addrs` in `config.yaml` to your public IP — this is what other nodes use to reach you, and it also stops the node advertising local-only addresses:
 
