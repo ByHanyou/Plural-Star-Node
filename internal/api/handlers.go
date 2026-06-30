@@ -72,11 +72,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		SenderID  string `json:"sender_peer_id,omitempty"`
 		Recipient string `json:"recipient_peer_id"`
 		Payload   string `json:"payload"`
-		// PacketID is optional. For multi-path redundancy the app sends the same
-		// packet to each connected node with the SAME id, so duplicates are
-		// suppressed by the dedup cache. If omitted, the node generates one.
 		PacketID string `json:"packet_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -110,7 +108,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		id = gid
 	}
-	sender := s.currentAppPeer()
+	var sender peer.ID
+	if req.SenderID != "" {
+		parsed, pErr := peer.Decode(req.SenderID)
+		if pErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid sender_peer_id")
+			return
+		}
+		sender = parsed
+	} else {
+		sender = s.currentAppPeer()
+	}
 	pkt := &relay.Packet{
 		ID:          id,
 		SenderID:    []byte(sender),
