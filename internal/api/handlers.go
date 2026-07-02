@@ -42,11 +42,35 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
-	routes := s.relay.Router().Snapshot()
-	out := make([]map[string]string, 0, len(routes))
-	for _, pr := range routes {
+	seen := make(map[string]struct{})
+	out := make([]map[string]string, 0)
+
+	// Locally connected apps first: they are NOT in the routing table (local
+	// delivery uses a separate map, and the node skips its own presence gossip),
+	// yet they're exactly the peers an app on this node most needs to see.
+	self := s.h.ID().String()
+	s.mu.RLock()
+	for c := range s.clients {
+		id := c.appPeer.String()
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
 		out = append(out, map[string]string{
-			"peer_id":  pr.Peer.String(),
+			"peer_id":  id,
+			"via_node": self,
+		})
+	}
+	s.mu.RUnlock()
+
+	for _, pr := range s.relay.Router().Snapshot() {
+		id := pr.Peer.String()
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, map[string]string{
+			"peer_id":  id,
 			"via_node": pr.Via.String(),
 		})
 	}
@@ -172,6 +196,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	client := newWSClient(conn, appPeer)
 	s.addClient(client)
 
+	// Tell every connected app this peer is online. The presence gossip only
+	// fires events for REMOTE transitions (the read loop skips this node's own
+	// announcements), so without this, two apps connected to the SAME node —
+	// the common case on the public node — never see each other come online.
+	s.broadcast(peerOnlineEvent{Type: "peer_online", PeerID: appPeer.String(), ViaNode: s.h.ID().String()})
+
 	// Register with the relay so packets for this app are delivered over the WS.
 	s.relay.AppConnected(appPeer, func(p *relay.Packet) {
 		sender := ""
@@ -194,6 +224,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.relay.AppDisconnected(appPeer)
 		s.removeClient(client)
 		client.close()
+		// Mirror of the local peer_online above — announce the local offline
+		// transition to the remaining connected apps.
+		s.broadcast(peerOfflineEvent{Type: "peer_offline", PeerID: appPeer.String()})
 	})
 }
 

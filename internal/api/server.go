@@ -41,7 +41,7 @@ type Server struct {
 	clients map[*wsClient]struct{}
 	appPeer peer.ID // most recently registered local app, used as /send sender
 
-	rv *rendezvousStore // in-memory code -> identity discovery (no disk)
+	rv *rendezvousStore // code -> identity discovery (disk-snapshotted, restart-safe)
 }
 
 // NewServer constructs the API server. Call SetPing and SetRelay before Start.
@@ -56,7 +56,7 @@ func NewServer(cfg *config.Config, configPath string, h host.Host, scope string)
 			CheckOrigin: func(*http.Request) bool { return true },
 		},
 		clients: make(map[*wsClient]struct{}),
-		rv:      newRendezvousStore(),
+		rv:      newRendezvousStore(rendezvousPathFor(configPath)),
 	}
 }
 

@@ -5,16 +5,24 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 // Rendezvous lets two app clients that share a short code find each other. The
 // app publishes its signed identity under namespace = hash(code); the other app
-// looks it up by the same namespace. The node never sees the code, never
-// inspects the record, and stores nothing on disk — entries live in memory and
-// expire. This is purely a discovery aid; all authentication and encryption
-// happen end-to-end in the app.
+// looks it up by the same namespace. The node never sees the code and never
+// inspects the record. This is purely a discovery aid; all authentication and
+// encryption happen end-to-end in the app.
+//
+// Entries are snapshotted to a small JSON file next to the config (namespace ->
+// opaque record + expiry) so a node restart doesn't invalidate every active
+// friend/sync code mid-pairing — that produced user-facing "code wasn't found"
+// for codes that were still well within their 30-minute window. Expired entries
+// are never loaded. The records were already public-by-design (they exist to be
+// looked up), so persistence adds no new exposure.
 //
 // Scope note: register and lookup must hit the same node. App clients on the
 // default public node resolve fine; cross-node propagation is a future addition.
@@ -30,15 +38,77 @@ type rendezvousEntry struct {
 	expiresAt time.Time
 }
 
+// persistedEntry is the on-disk form of one rendezvous entry.
+type persistedEntry struct {
+	Record    string `json:"record"`
+	ExpiresAt int64  `json:"expires_at"` // unix seconds
+}
+
 type rendezvousStore struct {
 	mu      sync.Mutex
 	entries map[string]rendezvousEntry
+	path    string // snapshot file; "" = memory-only (no persistence)
 }
 
-func newRendezvousStore() *rendezvousStore {
-	rs := &rendezvousStore{entries: make(map[string]rendezvousEntry)}
+// rendezvousPathFor derives the snapshot path from the node's config path so
+// the store lives alongside the rest of the node's state.
+func rendezvousPathFor(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(configPath), "rendezvous.json")
+}
+
+func newRendezvousStore(path string) *rendezvousStore {
+	rs := &rendezvousStore{entries: make(map[string]rendezvousEntry), path: path}
+	rs.load()
 	go rs.janitor()
 	return rs
+}
+
+// load restores unexpired entries from a previous run's snapshot.
+func (rs *rendezvousStore) load() {
+	if rs.path == "" {
+		return
+	}
+	b, err := os.ReadFile(rs.path)
+	if err != nil {
+		return // first run or unreadable snapshot — start empty
+	}
+	var m map[string]persistedEntry
+	if json.Unmarshal(b, &m) != nil {
+		return
+	}
+	now := time.Now()
+	rs.mu.Lock()
+	for ns, e := range m {
+		exp := time.Unix(e.ExpiresAt, 0)
+		if e.Record != "" && exp.After(now) {
+			rs.entries[ns] = rendezvousEntry{record: e.Record, expiresAt: exp}
+		}
+	}
+	rs.mu.Unlock()
+}
+
+// saveLocked snapshots the store to disk (atomic tmp+rename). Caller holds mu.
+// Best-effort: a failed write only costs restart durability, never a request.
+func (rs *rendezvousStore) saveLocked() {
+	if rs.path == "" {
+		return
+	}
+	m := make(map[string]persistedEntry, len(rs.entries))
+	for ns, e := range rs.entries {
+		m[ns] = persistedEntry{Record: e.record, ExpiresAt: e.expiresAt.Unix()}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	tmp := rs.path + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) != nil {
+		return
+	}
+	_ = os.Rename(tmp, rs.path)
 }
 
 // janitor periodically purges expired entries.
@@ -48,10 +118,15 @@ func (rs *rendezvousStore) janitor() {
 	for range t.C {
 		now := time.Now()
 		rs.mu.Lock()
+		removed := 0
 		for k, e := range rs.entries {
 			if now.After(e.expiresAt) {
 				delete(rs.entries, k)
+				removed++
 			}
+		}
+		if removed > 0 {
+			rs.saveLocked()
 		}
 		rs.mu.Unlock()
 	}
@@ -64,6 +139,7 @@ func (rs *rendezvousStore) put(namespace, record string, ttl time.Duration) bool
 		return false
 	}
 	rs.entries[namespace] = rendezvousEntry{record: record, expiresAt: time.Now().Add(ttl)}
+	rs.saveLocked()
 	return true
 }
 
