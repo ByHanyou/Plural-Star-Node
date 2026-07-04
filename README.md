@@ -47,7 +47,7 @@ go build -o plural-star-node ./cmd/node
 ./plural-star-node --config config.yaml
 ```
 
-On first run with no config, the node writes a default `config.yaml`, generates an Ed25519 identity (`node.key`), generates a random API token, and prints the token to stdout — configure that token in your Plural Star app.
+On first run with no config, the node writes a default `config.yaml` and generates an Ed25519 identity (`node.key`). The API starts open (no token); set `api_token` in `config.yaml` to require auth, then configure the same token in your Plural Star app.
 
 ### Cross-compile
 
@@ -66,6 +66,12 @@ set GOOS=linux
 set GOARCH=arm64
 go build -o plural-star-node-arm64 ./cmd/node
 ```
+
+## The push gateway (not part of this repo — you don't run it)
+
+Nodes are the only thing operators run. iOS Live Activity updates ("friend fronts on the Island") are delivered by a separate, single-instance **push gateway** operated by the app's developer. It is not distributed with this repo and is **not part of running a node** — hosting a relay on the default network or your own public/private network never involves it. Pushes are cryptographically tied to the official app's bundle ID and the developer's Apple account key, so one gateway serves every install of the official app, on any network. Someone forking the app itself (own bundle ID, own Apple Developer account) would need to build their own push delivery service against Apple's ActivityKit push API.
+
+What the gateway operator can see (disclosed for transparency, same spirit as the relay's privacy model): which peer IDs subscribed to Live Activity updates for which friend peer IDs, device push tokens, and the coarse fronter names senders choose to announce for the Island (Live Activity pushes are plaintext to Apple by design — the app never sends full front details down this lane). The gateway stores no messages, no sync data, and no relationships beyond that subscription list.
 
 ## Configuration
 

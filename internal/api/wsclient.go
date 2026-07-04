@@ -19,10 +19,11 @@ const (
 
 // wsClient is one connected app's WebSocket session.
 type wsClient struct {
-	conn      *websocket.Conn
-	appPeer   peer.ID
-	send      chan []byte
-	closeOnce sync.Once
+	conn    *websocket.Conn
+	appPeer peer.ID
+	send    chan []byte
+	mu      sync.Mutex // guards closed + the send/close race
+	closed  bool
 }
 
 func newWSClient(conn *websocket.Conn, appPeer peer.ID) *wsClient {
@@ -34,8 +35,15 @@ func newWSClient(conn *websocket.Conn, appPeer peer.ID) *wsClient {
 }
 
 // trySend queues a message, dropping it if the client's buffer is full (a slow
-// app must not block the relay or other clients).
+// app must not block the relay or other clients) or the client is closed. The
+// mutex makes send-vs-close safe: a concurrent close() can never turn this into
+// a send on a closed channel (which panics and kills the HTTP handler).
 func (c *wsClient) trySend(b []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	select {
 	case c.send <- b:
 	default:
@@ -43,7 +51,13 @@ func (c *wsClient) trySend(b []byte) {
 }
 
 func (c *wsClient) close() {
-	c.closeOnce.Do(func() { close(c.send) })
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.closed = true
+	close(c.send)
 }
 
 // writePump serializes all writes to the connection and sends periodic pings.

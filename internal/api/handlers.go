@@ -27,13 +27,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":         "ok",
-		"peer_id":        s.h.ID().String(),
-		"network_mode":   s.cfg.NetworkMode,
-		"network_id":     networkID,
+		"status":          "ok",
+		"peer_id":         s.h.ID().String(),
+		"network_mode":    s.cfg.NetworkMode,
+		"network_id":      networkID,
 		"connected_nodes": s.ping.Count(),
-		"connected_apps": apps,
-		"uptime_seconds": int64(time.Since(s.startedAt).Seconds()),
+		"connected_apps":  apps,
+		"uptime_seconds":  int64(time.Since(s.startedAt).Seconds()),
 	})
 }
 
@@ -101,6 +101,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		Payload   string `json:"payload"`
 		PacketID string `json:"packet_id,omitempty"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -221,12 +222,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	go client.writePump()
 	client.readPump(func() {
-		s.relay.AppDisconnected(appPeer)
 		s.removeClient(client)
 		client.close()
 		// Mirror of the local peer_online above — announce the local offline
 		// transition to the remaining connected apps.
-		s.broadcast(peerOfflineEvent{Type: "peer_offline", PeerID: appPeer.String()})
+		if !s.hasClientFor(appPeer) {
+			s.relay.AppDisconnected(appPeer)
+			s.broadcast(peerOfflineEvent{Type: "peer_offline", PeerID: appPeer.String()})
+		}
 	})
 }
 
@@ -269,6 +272,7 @@ func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Invite string `json:"invite"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return

@@ -42,6 +42,9 @@ type Server struct {
 	appPeer peer.ID // most recently registered local app, used as /send sender
 
 	rv *rendezvousStore // code -> identity discovery (disk-snapshotted, restart-safe)
+
+	rvGossipMu sync.RWMutex
+	rvGossip   *relay.RendezvousGossip // network-wide pairing propagation
 }
 
 // NewServer constructs the API server. Call SetPing and SetRelay before Start.
@@ -70,6 +73,48 @@ func (s *Server) SetRelay(m *relay.Manager) { s.relay = m }
 
 // SetNetworks injects the known-networks store (nil on private networks).
 func (s *Server) SetNetworks(store *network.Store) { s.networks = store }
+
+// SetRendezvousGossip injects the rendezvous propagation channel.
+func (s *Server) SetRendezvousGossip(g *relay.RendezvousGossip) {
+	s.rvGossipMu.Lock()
+	s.rvGossip = g
+	s.rvGossipMu.Unlock()
+}
+
+func (s *Server) rendezvousGossip() *relay.RendezvousGossip {
+	s.rvGossipMu.RLock()
+	defer s.rvGossipMu.RUnlock()
+	return s.rvGossip
+}
+
+// OnRemoteRendezvous merges a pairing record gossiped by another node into the
+// local store, making every node serve the same pairing directory.
+func (s *Server) OnRemoteRendezvous(namespace, record string, ttl time.Duration) {
+	s.rv.putRemote(namespace, record, ttl)
+}
+
+// RendezvousReannounceLoop periodically re-publishes this node's own live
+// registrations so nodes that joined after the original announcement converge.
+func (s *Server) RendezvousReannounceLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g := s.rendezvousGossip()
+			if g == nil {
+				continue
+			}
+			for _, e := range s.rv.localEntries() {
+				if err := g.Announce(e.Namespace, e.Record, e.ExpiresAt); err != nil {
+					log.Printf("rendezvous: re-announce failed: %v", err)
+				}
+			}
+		}
+	}
+}
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
@@ -111,6 +156,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for c := range s.clients {
 		c.close()
 	}
+	// Empty the map so late disconnect callbacks can't broadcast to the
+	// just-closed clients during shutdown.
+	s.clients = make(map[*wsClient]struct{})
 	s.mu.Unlock()
 	if s.httpSrv == nil {
 		return nil
@@ -178,8 +226,25 @@ func (s *Server) removeClient(c *wsClient) {
 	delete(s.clients, c)
 	if s.appPeer == c.appPeer {
 		s.appPeer = ""
+		for other := range s.clients {
+			if other.appPeer == c.appPeer {
+				s.appPeer = c.appPeer
+				break
+			}
+		}
 	}
 	s.mu.Unlock()
+}
+
+func (s *Server) hasClientFor(appPeer peer.ID) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for c := range s.clients {
+		if c.appPeer == appPeer {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) currentAppPeer() peer.ID {

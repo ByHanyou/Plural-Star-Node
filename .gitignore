@@ -12,6 +12,16 @@ network.psk
 networks.db
 *.key
 
+# Push gateway — operator-only, not distributed. Source, secrets, and runtime
+# files all stay local. NEVER commit.
+/cmd/gateway/
+*.p8
+gateway.yaml
+gateway-data.json
+rendezvous.json
+/plural-star-gateway
+/plural-star-gateway.exe
+
 # OS / editor noise
 .DS_Store
 *.swp

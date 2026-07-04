@@ -129,6 +129,14 @@ func run(configPath string) error {
 	srv.SetRelay(mgr)
 	log.Printf("relay protocol %s registered", relay.RelayProtocol)
 
+	rvGossip, rvErr := relay.NewRendezvousGossip(ctx, n.ps, h.ID(), network.GossipPrefix(cfg)+"rendezvous", srv.OnRemoteRendezvous)
+	if rvErr != nil {
+		return fmt.Errorf("rendezvous gossip: %w", rvErr)
+	}
+	srv.SetRendezvousGossip(rvGossip)
+	go srv.RendezvousReannounceLoop(ctx)
+	log.Printf("rendezvous gossip joined %q", network.GossipPrefix(cfg)+"rendezvous")
+
 	if cfg.NetworkMode != config.ModePrivate {
 		store, sErr := network.OpenStore(network.NetworkDBDefault)
 		if sErr != nil {
@@ -245,6 +253,10 @@ func printFirstRun(configPath, token string) {
 	fmt.Println("=====================================================")
 	fmt.Println(" Plural Star Node — first run")
 	fmt.Printf(" Wrote default config to: %s\n", configPath)
-	fmt.Printf(" API token (configure this in your Plural Star app):\n   %s\n", token)
+	if token == "" {
+		fmt.Println(" API auth is open (no token). Set api_token in config.yaml to require auth.")
+	} else {
+		fmt.Printf(" API token (configure this in your Plural Star app):\n   %s\n", token)
+	}
 	fmt.Println("=====================================================")
 }

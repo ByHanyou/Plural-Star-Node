@@ -5,8 +5,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 
@@ -58,7 +56,7 @@ type Config struct {
 }
 
 // Default returns a Config populated with the documented defaults. The API
-// token is left empty; callers should fill it (Load does so on first run).
+// token is left empty (open mode).
 func Default() *Config {
 	return &Config{
 		KeypairPath:    "./node.key",
@@ -81,9 +79,9 @@ func Default() *Config {
 	}
 }
 
-// Load reads the config from path. If the file does not exist, it generates a
-// default config with a fresh random API token, writes it to path, and returns
-// it with firstRun=true so the caller can surface the token to the user.
+// Load reads the config from path. If the file does not exist, it writes a
+// default config to path and returns it with firstRun=true. The default runs
+// open (no API token); operators can set api_token to require auth.
 func Load(path string) (cfg *Config, firstRun bool, err error) {
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
@@ -159,13 +157,4 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("max_app_connections must be positive")
 	}
 	return nil
-}
-
-// generateToken returns a 32-byte random token, hex-encoded.
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate api token: %w", err)
-	}
-	return hex.EncodeToString(b), nil
 }
