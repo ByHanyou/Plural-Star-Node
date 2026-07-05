@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -153,11 +154,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if rErr := s.relay.Route(pkt); rErr != nil {
-		if errors.Is(rErr, relay.ErrNoRoute) && sender != "" {
+		if !errors.Is(rErr, relay.ErrNoRoute) {
+			log.Printf("api: send %s -> %s failed: %v", sender, recipient, rErr)
+		}
+		if sender != "" {
+			msg := "Recipient not found in routing table"
+			if !errors.Is(rErr, relay.ErrNoRoute) {
+				msg = "Could not forward to recipient's node"
+			}
 			s.sendToApp(sender, errorEvent{
 				Type:    "error",
 				Code:    "SEND_FAILED",
-				Message: "Recipient not found in routing table",
+				Message: msg,
 			})
 		}
 	}
