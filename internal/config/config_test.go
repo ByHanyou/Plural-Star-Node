@@ -9,9 +9,7 @@ import (
 
 func TestValidateNetworkModes(t *testing.T) {
 	base := func() *Config {
-		c := Default()
-		c.APIToken = "x" // Validate requires a token
-		return c
+		return Default()
 	}
 
 	t.Run("public ok", func(t *testing.T) {
@@ -62,11 +60,6 @@ func TestValidateNetworkModes(t *testing.T) {
 			t.Fatal("api_port 0 should fail")
 		}
 		c = base()
-		c.APIToken = ""
-		if err := c.Validate(); err == nil {
-			t.Fatal("empty api_token should fail")
-		}
-		c = base()
 		c.ListenAddrs = nil
 		if err := c.Validate(); err == nil {
 			t.Fatal("no listen_addrs should fail")
@@ -74,7 +67,7 @@ func TestValidateNetworkModes(t *testing.T) {
 	})
 }
 
-func TestLoadFirstRunGeneratesTokenAndFile(t *testing.T) {
+func TestLoadFirstRunWritesOpenConfigAndFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg, firstRun, err := Load(path)
 	if err != nil {
@@ -83,8 +76,8 @@ func TestLoadFirstRunGeneratesTokenAndFile(t *testing.T) {
 	if !firstRun {
 		t.Fatal("expected firstRun=true on a fresh path")
 	}
-	if cfg.APIToken == "" {
-		t.Fatal("expected a generated api_token")
+	if cfg.APIToken != "" {
+		t.Fatal("expected first-run config to keep api_token empty")
 	}
 
 	// A second load reads the persisted file and is no longer first-run.

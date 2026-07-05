@@ -26,14 +26,14 @@ import (
 )
 
 type node struct {
-	cfg   *config.Config
-	h     host.Host
-	dht   *dht.IpfsDHT
-	ps    *pubsub.PubSub
-	rd    *drouting.RoutingDiscovery
-	relay *relay.Manager
-	ping  *ping.Manager
-	api   *api.Server
+	cfg      *config.Config
+	h        host.Host
+	dht      *dht.IpfsDHT
+	ps       *pubsub.PubSub
+	rd       *drouting.RoutingDiscovery
+	relay    *relay.Manager
+	ping     *ping.Manager
+	api      *api.Server
 	networks *network.Store
 }
 
@@ -126,6 +126,7 @@ func run(configPath string) error {
 		return fmt.Errorf("relay manager: %w", rErr)
 	}
 	n.relay = mgr
+	mgr.SetTrafficLogger(srv.TrafficLogger())
 	srv.SetRelay(mgr)
 	log.Printf("relay protocol %s registered", relay.RelayProtocol)
 

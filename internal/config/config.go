@@ -51,6 +51,8 @@ type Config struct {
 
 	RelayEnabled bool `yaml:"relay_enabled" json:"relay_enabled"`
 
+	VerboseTraffic bool `yaml:"verbose_traffic" json:"verbose_traffic"`
+
 	MaxPeers          int `yaml:"max_peers" json:"max_peers"`
 	MaxAppConnections int `yaml:"max_app_connections" json:"max_app_connections"`
 }
@@ -74,6 +76,7 @@ func Default() *Config {
 		},
 		AnnounceAddrs:     []string{},
 		RelayEnabled:      true,
+		VerboseTraffic:    false,
 		MaxPeers:          200,
 		MaxAppConnections: 5000,
 	}

@@ -39,6 +39,9 @@ announce_addrs: []
 # Whether this node forwards traffic for others.
 relay_enabled: true
 
+# Log API requests, WebSocket events, and relay packet flow to stdout.
+verbose_traffic: false
+
 # Connection limits.
 max_peers: 200
 max_app_connections: 5000

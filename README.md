@@ -87,6 +87,7 @@ See `config.yaml.example`. Key fields:
 | `api_port` / `api_token` | API port and bearer token |
 | `listen_addrs` | libp2p listen multiaddrs |
 | `relay_enabled` | whether this node forwards traffic for others |
+| `verbose_traffic` | log API requests, WebSocket events, and relay packet flow |
 | `max_peers` / `max_app_connections` | connection limits |
 
 ### Network modes
