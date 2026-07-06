@@ -21,6 +21,8 @@ gateway-data.json
 rendezvous.json
 /plural-star-gateway
 /plural-star-gateway.exe
+gateway
+gateway.exe
 
 # OS / editor noise
 .DS_Store
