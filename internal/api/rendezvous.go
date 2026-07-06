@@ -124,12 +124,7 @@ func (rs *rendezvousStore) persist(b []byte) {
 	if os.WriteFile(tmp, b, 0o600) != nil {
 		return
 	}
-	for i := 0; i < 10; i++ {
-		if os.Rename(tmp, rs.path) == nil {
-			return
-		}
-		time.Sleep(time.Duration(50*(i+1)) * time.Millisecond)
-	}
+	_ = os.Rename(tmp, rs.path)
 }
 
 // janitor periodically purges expired entries.
