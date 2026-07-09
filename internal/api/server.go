@@ -129,7 +129,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/rendezvous/register", s.authed(s.handleRendezvousRegister))
 	mux.HandleFunc("/rendezvous/lookup", s.authed(s.handleRendezvousLookup))
 	mux.HandleFunc("/ws", s.authed(s.handleWS))
-	return mux
+	return s.trafficMiddleware(mux)
 }
 
 // Start binds the API port and serves until Shutdown. It returns once the

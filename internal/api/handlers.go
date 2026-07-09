@@ -100,7 +100,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		SenderID  string `json:"sender_peer_id,omitempty"`
 		Recipient string `json:"recipient_peer_id"`
 		Payload   string `json:"payload"`
-		PacketID string `json:"packet_id,omitempty"`
+		PacketID  string `json:"packet_id,omitempty"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -152,6 +152,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		Payload:     payload,
 		Timestamp:   time.Now().UnixMilli(),
 	}
+	s.trafficf("app->node sender=%s recipient=%s packet_id=%s payload_bytes=%d", sender, recipient, hex.EncodeToString(id[:]), len(payload))
 
 	if rErr := s.relay.Route(pkt); rErr != nil {
 		if !errors.Is(rErr, relay.ErrNoRoute) {
@@ -204,6 +205,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	client := newWSClient(conn, appPeer)
 	s.addClient(client)
+	s.trafficf("ws connected app_peer=%s remote=%s", appPeer, r.RemoteAddr)
 
 	// Tell every connected app this peer is online. The presence gossip only
 	// fires events for REMOTE transitions (the read loop skips this node's own
@@ -217,6 +219,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if sid, e := peer.IDFromBytes(p.SenderID); e == nil {
 			sender = sid.String()
 		}
+		s.trafficf("node->app recipient=%s sender=%s packet_id=%s payload_bytes=%d", appPeer, sender, hex.EncodeToString(p.ID[:]), len(p.Payload))
 		ev := packetReceivedEvent{
 			Type:         "packet_received",
 			SenderPeerID: sender,
@@ -232,6 +235,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	client.readPump(func() {
 		s.removeClient(client)
 		client.close()
+		s.trafficf("ws disconnected app_peer=%s remote=%s", appPeer, r.RemoteAddr)
 		// Mirror of the local peer_online above — announce the local offline
 		// transition to the remaining connected apps.
 		if !s.hasClientFor(appPeer) {

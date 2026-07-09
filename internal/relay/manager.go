@@ -4,6 +4,7 @@ package relay
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -38,6 +39,7 @@ type Manager struct {
 	mu         sync.RWMutex
 	localApps  map[peer.ID]DeliverFunc
 	refreshers map[peer.ID]context.CancelFunc
+	trafficLog func(format string, args ...any)
 }
 
 // NewManager builds the relay manager, registers the stream handler, and starts
@@ -66,6 +68,22 @@ func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefi
 
 // Router exposes the routing table (read-only use by the API layer).
 func (m *Manager) Router() *Router { return m.router }
+
+// SetTrafficLogger installs an optional verbose traffic logger.
+func (m *Manager) SetTrafficLogger(fn func(format string, args ...any)) {
+	m.mu.Lock()
+	m.trafficLog = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) trafficf(format string, args ...any) {
+	m.mu.RLock()
+	fn := m.trafficLog
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(format, args...)
+	}
+}
 
 // AppConnected registers a locally connected app peer, announces its presence to
 // the network, and begins refreshing that presence before TTL expiry. deliver is
@@ -135,16 +153,19 @@ func (m *Manager) forwardOrDeliver(p *Packet) error {
 	deliver, isLocal := m.localApps[recipient]
 	m.mu.RUnlock()
 	if isLocal {
+		m.trafficf("relay local-deliver recipient=%s packet_id=%s payload_bytes=%d", recipient, hex.EncodeToString(p.ID[:]), len(p.Payload))
 		deliver(p)
 		return nil
 	}
 
 	via, ok := m.router.Lookup(recipient)
 	if !ok || via == m.self {
+		m.trafficf("relay no-route recipient=%s packet_id=%s", recipient, hex.EncodeToString(p.ID[:]))
 		// No live route, or a stale entry pointing back at this node for an app
 		// that is no longer connected locally — don't dial ourselves.
 		return ErrNoRoute
 	}
+	m.trafficf("relay forward recipient=%s via=%s packet_id=%s payload_bytes=%d", recipient, via, hex.EncodeToString(p.ID[:]), len(p.Payload))
 	return m.forwardTo(via, p)
 }
 
@@ -182,6 +203,10 @@ func (m *Manager) handleStream(s corenet.Stream) {
 		_ = s.Reset()
 		return
 	}
+	remote := s.Conn().RemotePeer()
+	recipient, _ := peer.IDFromBytes(p.RecipientID)
+	sender, _ := peer.IDFromBytes(p.SenderID)
+	m.trafficf("relay inbound from=%s sender=%s recipient=%s packet_id=%s payload_bytes=%d", remote, sender, recipient, hex.EncodeToString(p.ID[:]), len(p.Payload))
 	if err := m.Route(p); err != nil && !errors.Is(err, ErrNoRoute) {
 		log.Printf("relay: route packet: %v", err)
 	}
