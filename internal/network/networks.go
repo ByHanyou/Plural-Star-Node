@@ -14,15 +14,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// DefaultDirectoryURL is the well-known hosted directory of public networks,
-// fetched on startup as a bootstrap for the gossip layer.
-//
-// TODO: set to the real Plural Star directory endpoint before public release.
-// When empty, the directory fetch is skipped.
 const DefaultDirectoryURL = ""
 
-// NetworkDiscovery gossips signed network cards on the global DiscoveryTopic and
-// caches valid ones in the Store. Private networks must NOT use it.
 type NetworkDiscovery struct {
 	ctx   context.Context
 	self  peer.ID
@@ -31,7 +24,6 @@ type NetworkDiscovery struct {
 	sub   *pubsub.Subscription
 }
 
-// NewNetworkDiscovery joins the discovery topic and starts consuming cards.
 func NewNetworkDiscovery(ctx context.Context, ps *pubsub.PubSub, self peer.ID, store *Store) (*NetworkDiscovery, error) {
 	topic, err := ps.Join(DiscoveryTopic)
 	if err != nil {
@@ -46,8 +38,6 @@ func NewNetworkDiscovery(ctx context.Context, ps *pubsub.PubSub, self peer.ID, s
 	return nd, nil
 }
 
-// Announce signs nothing (the card must already be signed) — it stores and
-// gossips an already-valid card created by this node.
 func (nd *NetworkDiscovery) Announce(card NetworkCard) error {
 	if err := VerifyNetworkCard(&card); err != nil {
 		return err
@@ -80,7 +70,7 @@ func (nd *NetworkDiscovery) readLoop() {
 			continue
 		}
 		if err := VerifyNetworkCard(&card); err != nil {
-			continue // reject invalid signatures
+			continue
 		}
 
 		existing, found, err := nd.store.Get(card.ID)
@@ -88,18 +78,15 @@ func (nd *NetworkDiscovery) readLoop() {
 			continue
 		}
 		if found && card.CreatedAt <= existing.CreatedAt {
-			continue // not newer; ignore
+			continue
 		}
 		if err := nd.store.Put(card); err != nil {
 			continue
 		}
-		// Re-broadcast newly learned / updated cards so they propagate.
 		_ = nd.publish(card)
 	}
 }
 
-// FetchDirectory fetches the hosted directory JSON (an array of NetworkCards),
-// verifies each card's signature, and stores valid ones. A blank url is a no-op.
 func FetchDirectory(ctx context.Context, url string, store *Store) (int, error) {
 	if url == "" {
 		return 0, nil

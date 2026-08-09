@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 )
@@ -175,24 +177,41 @@ func run(configPath string) error {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
+	// Remembered peers ride alongside the bootstrap list everywhere it is
+	// dialled. The static list has a single entry, so on its own it makes the
+	// bootstrap node a double point of failure: a node restarting while the
+	// bootstrap is down comes up stranded even though the mesh is alive, and
+	// the bootstrap node itself dials nobody after a reboot because the only
+	// entry is its own address. Remembering who we were connected to lets
+	// every node redial the mesh it last saw, so the network heals from
+	// whichever side comes back first, with no restarts anywhere.
+	peerMem := psnhost.LoadPeerMemory(filepath.Join(filepath.Dir(configPath), "known_peers.json"))
+
 	bootstrapPeers := network.BootstrapPeers(cfg)
-	if len(bootstrapPeers) > 0 {
-		connected, bErr := psnhost.ConnectBootstrap(ctx, h, bootstrapPeers)
-		log.Printf("initial bootstrap: connected to %d/%d peers", connected, len(bootstrapPeers))
+	bootstrapInfos, bpErr := psnhost.ParsePeerAddrs(bootstrapPeers)
+	if bpErr != nil {
+		return bpErr
+	}
+	remembered := peerMem.DialTargets(h.ID())
+	targets := psnhost.MergeTargets(bootstrapInfos, remembered)
+	if len(targets) > 0 {
+		connected, bErr := psnhost.ConnectPeers(ctx, h, targets)
+		log.Printf("initial bootstrap: connected to %d/%d peers (%d remembered)", connected, len(targets), len(remembered))
 		if bErr != nil {
 			log.Printf("initial bootstrap partial: %v", bErr)
 		}
+		// Remember whoever that reached straight away, so even a node that
+		// dies before the first reconnect tick keeps what it learned.
+		peerMem.Snapshot(h)
+		peerMem.Save()
 	} else if cfg.NetworkMode == config.ModePublic {
-		log.Printf("warning: no bootstrap peers")
+		log.Printf("warning: no bootstrap peers and no remembered peers")
 	}
 
-	if len(bootstrapPeers) > 0 {
-		go persistentReconnectLoop(ctx, h, bootstrapPeers)
-	}
+	go persistentReconnectLoop(ctx, h, bootstrapInfos, peerMem)
 
 	go monitorConnections(ctx, h)
 
-	// Single-node self-advertise for testing
 	if n.rd != nil {
 		go singleNodeAdvertise(ctx, n.rd, network.DHTPrefix(cfg))
 	}
@@ -200,10 +219,14 @@ func run(configPath string) error {
 	log.Printf("node running; press Ctrl-C to stop")
 	<-ctx.Done()
 	log.Printf("shutting down")
+	// Final snapshot: a clean shutdown (reboot, update) is exactly the moment
+	// the current mesh view is most worth keeping for the next boot.
+	peerMem.Snapshot(h)
+	peerMem.Save()
 	return nil
 }
 
-func persistentReconnectLoop(ctx context.Context, h host.Host, bootstrapPeers []string) {
+func persistentReconnectLoop(ctx context.Context, h host.Host, bootstrapInfos []peer.AddrInfo, peerMem *psnhost.PeerMemory) {
 	ticker := time.NewTicker(90 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -211,9 +234,17 @@ func persistentReconnectLoop(ctx context.Context, h host.Host, bootstrapPeers []
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			connected, err := psnhost.ConnectBootstrap(ctx, h, bootstrapPeers)
+			// Record the mesh as it is before dialling, so an address that is
+			// about to die of a reboot was already saved while it worked.
+			peerMem.Snapshot(h)
+			peerMem.Save()
+			targets := psnhost.MergeTargets(bootstrapInfos, peerMem.DialTargets(h.ID()))
+			if len(targets) == 0 {
+				continue
+			}
+			connected, err := psnhost.ConnectPeers(ctx, h, targets)
 			if connected > 0 {
-				log.Printf("reconnect success: %d bootstrap peers", connected)
+				log.Printf("reconnect success: %d peers", connected)
 			} else if err != nil {
 				log.Printf("reconnect failed: %v", err)
 			}
@@ -254,7 +285,13 @@ func printFirstRun(configPath, token string) {
 	fmt.Println(" Plural Star Node — first run")
 	fmt.Printf(" Wrote default config to: %s\n", configPath)
 	if token == "" {
-		fmt.Println(" API auth is open (no token). Set api_token in config.yaml to require auth.")
+		// A first run is always a public node, and a public node must stay
+		// open. Telling the operator to set a token here is what started the
+		// lockout: it reads as hardening, and instead it shuts out every app
+		// on the default network. Auth belongs to private/custom_public.
+		fmt.Println(" API auth is open, which is correct for a public node: apps on the")
+		fmt.Println(" default network have no token. api_token is for private and")
+		fmt.Println(" custom_public networks only, and is ignored here.")
 	} else {
 		fmt.Printf(" API token (configure this in your Plural Star app):\n   %s\n", token)
 	}

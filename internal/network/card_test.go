@@ -30,7 +30,6 @@ func TestNetworkCardSignVerify(t *testing.T) {
 		t.Fatalf("verify should pass: %v", err)
 	}
 
-	// Tampering must invalidate the signature.
 	tampered := card
 	tampered.Description = "evil"
 	if err := VerifyNetworkCard(&tampered); err == nil {

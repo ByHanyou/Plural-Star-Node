@@ -12,33 +12,24 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// DiscoveryTopic is the global, cross-network GossipSub topic on which network
-// cards are gossiped. It is NOT network-scoped: nodes participate regardless of
-// their own network (except private networks, which never join it).
 const DiscoveryTopic = "plural-star:discovery:networks"
 
-// NetworkCard advertises a public network. It is self-signed by its creator;
-// the signature covers every field except Signature itself.
 type NetworkCard struct {
 	ID             string   `json:"id"`
 	Name           string   `json:"name"`
 	Description    string   `json:"description"`
 	BootstrapPeers []string `json:"bootstrap_peers"`
 	NodeCountHint  int      `json:"node_count_hint"`
-	CreatedBy      string   `json:"created_by"` // creator peer ID
+	CreatedBy      string   `json:"created_by"`
 	CreatedAt      int64    `json:"created_at"`
-	Signature      string   `json:"signature"` // base64 Ed25519 signature
+	Signature      string   `json:"signature"`
 }
 
-// signingBytes returns the canonical bytes signed/verified: the card with an
-// empty Signature field. Struct marshaling preserves field order, so this is
-// deterministic.
 func (c NetworkCard) signingBytes() ([]byte, error) {
 	c.Signature = ""
 	return json.Marshal(c)
 }
 
-// SignNetworkCard sets CreatedBy to priv's peer ID and fills Signature.
 func SignNetworkCard(c *NetworkCard, priv crypto.PrivKey) error {
 	pid, err := peer.IDFromPrivateKey(priv)
 	if err != nil {
@@ -57,7 +48,6 @@ func SignNetworkCard(c *NetworkCard, priv crypto.PrivKey) error {
 	return nil
 }
 
-// VerifyNetworkCard checks the self-signature against the CreatedBy peer ID.
 func VerifyNetworkCard(c *NetworkCard) error {
 	if c.Signature == "" {
 		return errors.New("card has no signature")

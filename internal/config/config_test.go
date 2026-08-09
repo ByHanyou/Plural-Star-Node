@@ -10,7 +10,7 @@ import (
 func TestValidateNetworkModes(t *testing.T) {
 	base := func() *Config {
 		c := Default()
-		c.APIToken = "x" // Validate requires a token
+		c.APIToken = "x"
 		return c
 	}
 
@@ -63,8 +63,8 @@ func TestValidateNetworkModes(t *testing.T) {
 		}
 		c = base()
 		c.APIToken = ""
-		if err := c.Validate(); err == nil {
-			t.Fatal("empty api_token should fail")
+		if err := c.Validate(); err != nil {
+			t.Fatalf("empty api_token is the required state for a public node: %v", err)
 		}
 		c = base()
 		c.ListenAddrs = nil
@@ -74,7 +74,7 @@ func TestValidateNetworkModes(t *testing.T) {
 	})
 }
 
-func TestLoadFirstRunGeneratesTokenAndFile(t *testing.T) {
+func TestLoadFirstRunWritesFileAndLeavesAuthOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg, firstRun, err := Load(path)
 	if err != nil {
@@ -83,11 +83,12 @@ func TestLoadFirstRunGeneratesTokenAndFile(t *testing.T) {
 	if !firstRun {
 		t.Fatal("expected firstRun=true on a fresh path")
 	}
-	if cfg.APIToken == "" {
-		t.Fatal("expected a generated api_token")
+	// A default node is public, and a public node must stay open: app users on
+	// the default network have no token, and every endpoint is behind auth.
+	if cfg.APIToken != "" {
+		t.Fatalf("first run must leave api_token empty, got %q", cfg.APIToken)
 	}
 
-	// A second load reads the persisted file and is no longer first-run.
 	cfg2, firstRun2, err := Load(path)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -95,7 +96,56 @@ func TestLoadFirstRunGeneratesTokenAndFile(t *testing.T) {
 	if firstRun2 {
 		t.Fatal("expected firstRun=false on reload")
 	}
-	if cfg2.APIToken != cfg.APIToken {
-		t.Fatal("api_token should persist across loads")
+	if cfg2.APIToken != "" {
+		t.Fatalf("api_token must stay empty across loads, got %q", cfg2.APIToken)
+	}
+}
+
+// A token that finds its way into a public node's config is stripped on load
+// AND rewritten to disk, so it cannot survive to lock the network out again on
+// the next boot. This is the 2026-07-31 outage, made unrepeatable.
+func TestLoadStripsAPITokenFromPublicConfigAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	seed := Default()
+	seed.APIToken = "9c4c5d67ce608408114975b1d4cc020d8e874eba91ae92f227492df7be312bee"
+	if err := Save(seed, path); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.APIToken != "" {
+		t.Fatalf("public api_token should have been stripped, got %q", cfg.APIToken)
+	}
+
+	reread, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reread.APIToken != "" {
+		t.Fatal("stripped api_token was not written back to disk, so it would return on the next boot")
+	}
+}
+
+// Operator-run networks are not the default network, so a token there is a
+// deliberate choice and must be left alone.
+func TestLoadKeepsAPITokenOnPrivateNetwork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	seed := Default()
+	seed.NetworkMode = ModePrivate
+	seed.BootstrapPeers = []string{"/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWGFEV2PobB8q33b9MW5sCeKtpfTdWHyPmoV6sAYqZHcCU"}
+	seed.APIToken = "keep-me"
+	if err := Save(seed, path); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.APIToken != "keep-me" {
+		t.Fatalf("private network token should survive, got %q", cfg.APIToken)
 	}
 }

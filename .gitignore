@@ -10,6 +10,7 @@ config.yaml
 node.key
 network.psk
 networks.db
+known_peers.json
 *.key
 
 # Push gateway — operator-only, not distributed. Source, secrets, and runtime

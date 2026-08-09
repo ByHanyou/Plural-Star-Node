@@ -9,10 +9,6 @@ import (
 	"github.com/ByHanyou/Plural-Star-Node/internal/config"
 )
 
-// ApplyInvite writes the invite's PSK to pskPath and mutates cfg to join the
-// private network: sets private mode, the PSK path, the label as network ID, and
-// adds the inviting node(s) as bootstrap peers. The caller is responsible for
-// persisting cfg (config.Save) and restarting the node.
 func ApplyInvite(cfg *config.Config, inv Invite, pskPath string) error {
 	if pskPath == "" {
 		pskPath = "./network.psk"

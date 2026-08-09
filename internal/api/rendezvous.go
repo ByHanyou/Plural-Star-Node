@@ -12,50 +12,31 @@ import (
 	"time"
 )
 
-// Rendezvous lets two app clients that share a short code find each other. The
-// app publishes its signed identity under namespace = hash(code); the other app
-// looks it up by the same namespace. The node never sees the code and never
-// inspects the record. This is purely a discovery aid; all authentication and
-// encryption happen end-to-end in the app.
-//
-// Entries are snapshotted to a small JSON file next to the config (namespace ->
-// opaque record + expiry) so a node restart doesn't invalidate every active
-// friend/sync code mid-pairing — that produced user-facing "code wasn't found"
-// for codes that were still well within their 30-minute window. Expired entries
-// are never loaded. The records were already public-by-design (they exist to be
-// looked up), so persistence adds no new exposure.
-//
-// Scope note: register and lookup must hit the same node. App clients on the
-// default public node resolve fine; cross-node propagation is a future addition.
-
 const (
-	rendezvousMaxEntries   = 20000     // cap to bound memory
-	rendezvousMaxRecordLen = 8 * 1024  // opaque record byte cap
-	rendezvousMaxTTLSecs   = 3600       // 1h ceiling (app uses 30m)
+	rendezvousMaxEntries   = 20000
+	rendezvousMaxRecordLen = 8 * 1024
+	rendezvousMaxTTLSecs   = 3600
 )
 
 type rendezvousEntry struct {
 	record    string
 	expiresAt time.Time
-	local     bool // registered by an app on THIS node (origin re-announces it)
+	local     bool
 }
 
-// persistedEntry is the on-disk form of one rendezvous entry.
 type persistedEntry struct {
 	Record    string `json:"record"`
-	ExpiresAt int64  `json:"expires_at"` // unix seconds
+	ExpiresAt int64  `json:"expires_at"`
 	Local     bool   `json:"local,omitempty"`
 }
 
 type rendezvousStore struct {
 	mu      sync.Mutex
 	entries map[string]rendezvousEntry
-	path    string     // snapshot file; "" = memory-only (no persistence)
-	fileMu  sync.Mutex // serializes snapshot writes, held WITHOUT mu
+	path    string
+	fileMu  sync.Mutex
 }
 
-// rendezvousPathFor derives the snapshot path from the node's config path so
-// the store lives alongside the rest of the node's state.
 func rendezvousPathFor(configPath string) string {
 	if configPath == "" {
 		return ""
@@ -70,14 +51,13 @@ func newRendezvousStore(path string) *rendezvousStore {
 	return rs
 }
 
-// load restores unexpired entries from a previous run's snapshot.
 func (rs *rendezvousStore) load() {
 	if rs.path == "" {
 		return
 	}
 	b, err := os.ReadFile(rs.path)
 	if err != nil {
-		return // first run or unreadable snapshot — start empty
+		return
 	}
 	var m map[string]persistedEntry
 	if json.Unmarshal(b, &m) != nil {
@@ -94,8 +74,6 @@ func (rs *rendezvousStore) load() {
 	rs.mu.Unlock()
 }
 
-// snapshotLocked marshals the store's current state. Caller holds mu; this is
-// pure CPU work so the lock is held only briefly.
 func (rs *rendezvousStore) snapshotLocked() []byte {
 	if rs.path == "" {
 		return nil
@@ -111,9 +89,6 @@ func (rs *rendezvousStore) snapshotLocked() []byte {
 	return b
 }
 
-// persist writes a snapshot to disk (atomic tmp+rename). Called WITHOUT mu so
-// slow disk/AV scans can never stall register/lookup requests behind file IO.
-// Best-effort: a failed write only costs restart durability, never a request.
 func (rs *rendezvousStore) persist(b []byte) {
 	if rs.path == "" || b == nil {
 		return
@@ -127,7 +102,6 @@ func (rs *rendezvousStore) persist(b []byte) {
 	_ = os.Rename(tmp, rs.path)
 }
 
-// janitor periodically purges expired entries.
 func (rs *rendezvousStore) janitor() {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -163,16 +137,13 @@ func (rs *rendezvousStore) put(namespace, record string, ttl time.Duration) bool
 	return true
 }
 
-// putRemote merges a record gossiped by another node. Later expiry wins so a
-// renewal beats stale gossip; a locally registered entry is never downgraded
-// to remote by an echo of itself.
 func (rs *rendezvousStore) putRemote(namespace, record string, ttl time.Duration) {
 	expiresAt := time.Now().Add(ttl)
 	rs.mu.Lock()
 	cur, exists := rs.entries[namespace]
 	if exists && !cur.expiresAt.Before(expiresAt) {
 		rs.mu.Unlock()
-		return // what we have is as fresh or fresher
+		return
 	}
 	if !exists && len(rs.entries) >= rendezvousMaxEntries {
 		rs.mu.Unlock()
@@ -185,9 +156,6 @@ func (rs *rendezvousStore) putRemote(namespace, record string, ttl time.Duration
 	rs.persist(snapshot)
 }
 
-// localEntries returns unexpired locally registered records for periodic
-// re-announcement, so nodes that joined the network after the original
-// registration still converge on the same pairing directory.
 func (rs *rendezvousStore) localEntries() []struct {
 	Namespace string
 	Record    string
@@ -258,8 +226,6 @@ func (s *Server) handleRendezvousRegister(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusServiceUnavailable, "rendezvous full")
 		return
 	}
-	// Propagate to the rest of the network so pairing works regardless of
-	// which node each side is connected to.
 	if g := s.rendezvousGossip(); g != nil {
 		if err := g.Announce(req.Namespace, req.Record, time.Now().Add(time.Duration(ttl)*time.Second)); err != nil {
 			log.Printf("rendezvous: gossip announce failed: %v", err)

@@ -47,7 +47,9 @@ go build -o plural-star-node ./cmd/node
 ./plural-star-node --config config.yaml
 ```
 
-On first run with no config, the node writes a default `config.yaml` and generates an Ed25519 identity (`node.key`). The API starts open (no token); set `api_token` in `config.yaml` to require auth, then configure the same token in your Plural Star app.
+On first run with no config, the node writes a default `config.yaml` and generates an Ed25519 identity (`node.key`). The API starts open, which is correct for a public node.
+
+`api_token` gates **every** endpoint, including the ones apps use, and apps on the default public network do not send one. Setting it on a public node therefore does not harden the node, it shuts the whole network out, and nothing reads the file until the next start, so the breakage only shows up after a reboot. Public nodes ignore it: the value is stripped and rewritten to `""` on load, with a line in the log saying so. Use `api_token` on `private` / `custom_public` networks only, and configure the same token in your Plural Star app.
 
 ### Cross-compile
 
@@ -97,7 +99,7 @@ See `config.yaml.example`. Key fields:
 
 ## API
 
-All endpoints require `Authorization: Bearer <api_token>` (WebSocket clients may instead pass `?token=<api_token>`).
+When `api_token` is set (private / custom_public only), all endpoints require `Authorization: Bearer <api_token>` (WebSocket clients may instead pass `?token=<api_token>`). On a public node the token is always empty and every endpoint is open.
 
 | Method | Path | Description |
 |---|---|---|
@@ -222,9 +224,9 @@ Relay nodes are untrusted. They route on `RecipientID` and never inspect `Payloa
 
 The node is relay-only and **stores no personal data**. It handles:
 
-- **libp2p peer IDs** — of other nodes and of connected app clients, kept in memory (routing table, presence) and never written to disk. A peer ID is a random public-key identifier, not account or contact information.
+- **libp2p peer IDs** — of connected app clients, kept in memory (routing table, presence) and never written to disk. A peer ID is a random public-key identifier, not account or contact information. Peer IDs of other **nodes** (server infrastructure, not people) are cached on disk with their public listen addresses so the mesh can redial itself after an outage.
 - **Encrypted payloads** — passed through opaquely; never inspected, logged, or stored. End-to-end encryption is performed by the app.
 
-The only files a node writes are operational and contain no user data: its own keypair (`node.key`), config (`config.yaml`), an optional private-network PSK (`network.psk`), and a cache of public *network cards* (`networks.db`). The local API binds to `127.0.0.1` and is gated by a bearer token.
+The only files a node writes are operational and contain no user data: its own keypair (`node.key`), config (`config.yaml`), an optional private-network PSK (`network.psk`), a cache of public *network cards* (`networks.db`), a cache of recently connected node peers (`known_peers.json`), and persisted pairing-directory records (`rendezvous.json` — short-lived, signed, already-public records apps publish to be found by a friend code). The local API binds to `127.0.0.1`; on private and custom_public networks it is gated by a bearer token.
 
 Because the node neither collects nor stores personal data, it does not by itself require a formal privacy policy. Operators who run **public bootstrap nodes** may still want to publish a short transparency statement (what their node logs, retention, jurisdiction). A full privacy policy belongs with the **Plural Star app**, which handles user content and is subject to app-store requirements.

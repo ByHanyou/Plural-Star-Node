@@ -8,15 +8,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// PeerRoute is a live routing-table entry: an app peer and the node it is
-// reachable through.
 type PeerRoute struct {
 	Peer peer.ID
 	Via  peer.ID
 }
 
-// Snapshot returns all live (non-expired) routing entries, for the API's
-// /peers endpoint.
 func (r *Router) Snapshot() []PeerRoute {
 	now := time.Now()
 	r.mu.RLock()

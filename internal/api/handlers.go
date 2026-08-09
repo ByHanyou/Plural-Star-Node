@@ -46,9 +46,6 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	seen := make(map[string]struct{})
 	out := make([]map[string]string, 0)
 
-	// Locally connected apps first: they are NOT in the routing table (local
-	// delivery uses a separate map, and the node skips its own presence gossip),
-	// yet they're exactly the peers an app on this node most needs to see.
 	self := s.h.ID().String()
 	s.mu.RLock()
 	for c := range s.clients {
@@ -169,9 +166,6 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	// Delivery is best-effort; the node does not confirm receipt. The packet_id
-	// is returned so the app can reuse it when sending the same packet to its
-	// other connected nodes (multi-path redundancy + dedup).
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":    "queued",
 		"packet_id": hex.EncodeToString(id[:]),
@@ -199,41 +193,36 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		return // Upgrade already wrote an error response
+		return
 	}
 
 	client := newWSClient(conn, appPeer)
 	s.addClient(client)
 
-	// Tell every connected app this peer is online. The presence gossip only
-	// fires events for REMOTE transitions (the read loop skips this node's own
-	// announcements), so without this, two apps connected to the SAME node —
-	// the common case on the public node — never see each other come online.
 	s.broadcast(peerOnlineEvent{Type: "peer_online", PeerID: appPeer.String(), ViaNode: s.h.ID().String()})
 
-	// Register with the relay so packets for this app are delivered over the WS.
+	// Deliver to EVERY client connected under this peer ID, not just the socket
+	// that happened to register last. Linked devices share one identity, so one
+	// address legitimately has several live connections and all of them must
+	// receive. This also survives the registering socket closing while siblings
+	// remain, since the relay slot no longer captures a single client.
 	s.relay.AppConnected(appPeer, func(p *relay.Packet) {
 		sender := ""
 		if sid, e := peer.IDFromBytes(p.SenderID); e == nil {
 			sender = sid.String()
 		}
-		ev := packetReceivedEvent{
+		s.sendToApp(appPeer, packetReceivedEvent{
 			Type:         "packet_received",
 			SenderPeerID: sender,
 			Payload:      base64.StdEncoding.EncodeToString(p.Payload),
 			Timestamp:    p.Timestamp,
-		}
-		if b, e := json.Marshal(ev); e == nil {
-			client.trySend(b)
-		}
+		})
 	})
 
 	go client.writePump()
 	client.readPump(func() {
 		s.removeClient(client)
 		client.close()
-		// Mirror of the local peer_online above — announce the local offline
-		// transition to the remaining connected apps.
 		if !s.hasClientFor(appPeer) {
 			s.relay.AppDisconnected(appPeer)
 			s.broadcast(peerOfflineEvent{Type: "peer_offline", PeerID: appPeer.String()})
@@ -298,8 +287,6 @@ func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not persist config: "+err.Error())
 		return
 	}
-	// Joining a PSK-protected network requires rebuilding the libp2p host with
-	// the new key, which happens on restart.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":           "accepted",
 		"restart_required": true,

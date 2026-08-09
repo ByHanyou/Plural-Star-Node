@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package api implements the local app<->node API: a REST + WebSocket server
-// authenticated with a bearer token.
 package api
 
 import (
@@ -23,7 +21,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// Server is the app-facing HTTP/WebSocket API.
 type Server struct {
 	cfg        *config.Config
 	configPath string
@@ -39,15 +36,14 @@ type Server struct {
 
 	mu      sync.RWMutex
 	clients map[*wsClient]struct{}
-	appPeer peer.ID // most recently registered local app, used as /send sender
+	appPeer peer.ID
 
-	rv *rendezvousStore // code -> identity discovery (disk-snapshotted, restart-safe)
+	rv *rendezvousStore
 
 	rvGossipMu sync.RWMutex
-	rvGossip   *relay.RendezvousGossip // network-wide pairing propagation
+	rvGossip   *relay.RendezvousGossip
 }
 
-// NewServer constructs the API server. Call SetPing and SetRelay before Start.
 func NewServer(cfg *config.Config, configPath string, h host.Host, scope string) *Server {
 	return &Server{
 		cfg:        cfg,
@@ -63,18 +59,12 @@ func NewServer(cfg *config.Config, configPath string, h host.Host, scope string)
 	}
 }
 
-// SetPing injects the ping manager (created after the server so its node-event
-// callback can target this server's WebSocket clients).
 func (s *Server) SetPing(m *ping.Manager) { s.ping = m }
 
-// SetRelay injects the relay manager (created after the server so its peer-event
-// callback can target this server's WebSocket clients).
 func (s *Server) SetRelay(m *relay.Manager) { s.relay = m }
 
-// SetNetworks injects the known-networks store (nil on private networks).
 func (s *Server) SetNetworks(store *network.Store) { s.networks = store }
 
-// SetRendezvousGossip injects the rendezvous propagation channel.
 func (s *Server) SetRendezvousGossip(g *relay.RendezvousGossip) {
 	s.rvGossipMu.Lock()
 	s.rvGossip = g
@@ -87,14 +77,10 @@ func (s *Server) rendezvousGossip() *relay.RendezvousGossip {
 	return s.rvGossip
 }
 
-// OnRemoteRendezvous merges a pairing record gossiped by another node into the
-// local store, making every node serve the same pairing directory.
 func (s *Server) OnRemoteRendezvous(namespace, record string, ttl time.Duration) {
 	s.rv.putRemote(namespace, record, ttl)
 }
 
-// RendezvousReannounceLoop periodically re-publishes this node's own live
-// registrations so nodes that joined after the original announcement converge.
 func (s *Server) RendezvousReannounceLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -132,8 +118,6 @@ func (s *Server) routes() http.Handler {
 	return mux
 }
 
-// Start binds the API port and serves until Shutdown. It returns once the
-// listener stops.
 func (s *Server) Start() error {
 	host := s.cfg.APIHost
 	if host == "" {
@@ -150,14 +134,11 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server and closes WebSocket clients.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	for c := range s.clients {
 		c.close()
 	}
-	// Empty the map so late disconnect callbacks can't broadcast to the
-	// just-closed clients during shutdown.
 	s.clients = make(map[*wsClient]struct{})
 	s.mu.Unlock()
 	if s.httpSrv == nil {
@@ -166,9 +147,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpSrv.Shutdown(ctx)
 }
 
-// ----- event hooks (wired into relay + ping) -----
-
-// OnAppPeerEvent is the relay.PeerEvent callback: broadcast app online/offline.
 func (s *Server) OnAppPeerEvent(peerID, viaNode peer.ID, online bool) {
 	if online {
 		s.broadcast(peerOnlineEvent{Type: "peer_online", PeerID: peerID.String(), ViaNode: viaNode.String()})
@@ -177,7 +155,6 @@ func (s *Server) OnAppPeerEvent(peerID, viaNode peer.ID, online bool) {
 	}
 }
 
-// OnNodeEvent is the ping.EventFunc callback: broadcast node connect/disconnect.
 func (s *Server) OnNodeEvent(peerID peer.ID, rttMs int64, connected bool) {
 	if connected {
 		s.broadcast(nodeConnectedEvent{Type: "node_connected", NodePeerID: peerID.String(), RTTms: rttMs})
@@ -185,8 +162,6 @@ func (s *Server) OnNodeEvent(peerID peer.ID, rttMs int64, connected bool) {
 		s.broadcast(nodeDisconnectedEvent{Type: "node_disconnected", NodePeerID: peerID.String()})
 	}
 }
-
-// ----- broadcast helpers -----
 
 func (s *Server) broadcast(ev any) {
 	b, err := json.Marshal(ev)
@@ -252,8 +227,6 @@ func (s *Server) currentAppPeer() peer.ID {
 	defer s.mu.RUnlock()
 	return s.appPeer
 }
-
-// ----- response helpers -----
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

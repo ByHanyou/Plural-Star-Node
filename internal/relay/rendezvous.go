@@ -12,19 +12,12 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// rendezvousMsg is the JSON gossiped on the rendezvous topic when an app
-// registers (or a node refreshes) a pairing record. Records are opaque,
-// self-certifying blobs — signed by the app and verified client-side — so
-// nodes can propagate them without trusting each other. Expiry is TTL-only;
-// there are no tombstones.
 type rendezvousMsg struct {
 	Namespace string `json:"namespace"`
 	Record    string `json:"record"`
-	ExpiresAt int64  `json:"expires_at"` // unix milliseconds
+	ExpiresAt int64  `json:"expires_at"`
 }
 
-// RecordEvent is invoked for every valid rendezvous record received from a
-// remote node, so the API layer can merge it into the local store.
 type RecordEvent func(namespace, record string, ttl time.Duration)
 
 const (
@@ -33,9 +26,6 @@ const (
 	rendezvousMaxTTL          = time.Hour
 )
 
-// RendezvousGossip publishes and consumes pairing records on a GossipSub
-// topic, mirroring Presence: same scoped-topic scheme, same TTL'd upsert
-// model, so every node in the network serves the same pairing directory.
 type RendezvousGossip struct {
 	ctx      context.Context
 	self     peer.ID
@@ -44,8 +34,6 @@ type RendezvousGossip struct {
 	onRecord RecordEvent
 }
 
-// NewRendezvousGossip joins topicName and starts consuming records. onRecord
-// may be nil (a node that only publishes).
 func NewRendezvousGossip(ctx context.Context, ps *pubsub.PubSub, self peer.ID, topicName string, onRecord RecordEvent) (*RendezvousGossip, error) {
 	topic, err := ps.Join(topicName)
 	if err != nil {
@@ -66,7 +54,6 @@ func NewRendezvousGossip(ctx context.Context, ps *pubsub.PubSub, self peer.ID, t
 	return g, nil
 }
 
-// Announce publishes (or refreshes) a locally registered record to the network.
 func (g *RendezvousGossip) Announce(namespace, record string, expiresAt time.Time) error {
 	m := rendezvousMsg{
 		Namespace: namespace,
@@ -84,9 +71,8 @@ func (g *RendezvousGossip) readLoop() {
 	for {
 		msg, err := g.sub.Next(g.ctx)
 		if err != nil {
-			return // ctx cancelled or subscription closed
+			return
 		}
-		// Skip our own announcements; our local store is authoritative for them.
 		if msg.ReceivedFrom == g.self {
 			continue
 		}
@@ -102,7 +88,7 @@ func (g *RendezvousGossip) readLoop() {
 		}
 		ttl := time.Until(time.UnixMilli(m.ExpiresAt))
 		if ttl <= 0 {
-			continue // already expired
+			continue
 		}
 		if ttl > rendezvousMaxTTL {
 			ttl = rendezvousMaxTTL

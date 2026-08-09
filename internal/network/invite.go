@@ -14,31 +14,18 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-// Invite encoding, per spec:
-//
-//	psnode://v1/<base58(version_byte + addrs + psk_32 + label_utf8)>
-//
-// Binary body layout:
-//
-//	[version:1]
-//	[numAddrs:1]
-//	numAddrs × ( [addrLen:uint16 BE] [addr bytes] )   // multiaddr binary form
-//	[psk:32]
-//	[label: remaining bytes, UTF-8]
 const (
 	inviteScheme  = "psnode://v1/"
 	inviteVersion = 0x01
 	pskLen        = 32
 )
 
-// Invite is a decoded private-network invite.
 type Invite struct {
 	Multiaddrs []ma.Multiaddr
 	PSK        []byte
 	Label      string
 }
 
-// EncodeInvite serializes an invite to its psnode:// string form.
 func EncodeInvite(inv Invite) (string, error) {
 	if len(inv.PSK) != pskLen {
 		return "", fmt.Errorf("psk must be %d bytes, got %d", pskLen, len(inv.PSK))
@@ -69,7 +56,6 @@ func EncodeInvite(inv Invite) (string, error) {
 	return inviteScheme + base58.Encode(buf.Bytes()), nil
 }
 
-// DecodeInvite parses a psnode:// invite string.
 func DecodeInvite(s string) (Invite, error) {
 	var inv Invite
 	s = strings.TrimSpace(s)

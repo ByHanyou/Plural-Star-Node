@@ -17,13 +17,8 @@ import (
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 )
 
-// mdnsServiceTag is the LAN service name nodes use to find each other via mDNS.
 const mdnsServiceTag = "plural-star"
 
-// NewGossipSub creates a GossipSub instance. When kdht is non-nil it wires the
-// DHT in as a discovery backend (so pubsub can find peers for sparse topics) and
-// returns the routing discovery for reuse by the advertise/find loop. For
-// private networks (no DHT), pass nil; the returned discovery is then nil too.
 func NewGossipSub(ctx context.Context, h host.Host, kdht *dht.IpfsDHT) (*pubsub.PubSub, *drouting.RoutingDiscovery, error) {
 	var (
 		opts []pubsub.Option
@@ -40,9 +35,6 @@ func NewGossipSub(ctx context.Context, h host.Host, kdht *dht.IpfsDHT) (*pubsub.
 	return ps, rd, nil
 }
 
-// AdvertiseAndDiscover advertises the rendezvous namespace on the DHT and runs a
-// background loop that periodically finds peers sharing it and dials any that
-// aren't already connected. It returns immediately; the loop stops with ctx.
 func AdvertiseAndDiscover(ctx context.Context, h host.Host, rd *drouting.RoutingDiscovery, rendezvous string) {
 	if rd == nil {
 		return
@@ -83,7 +75,6 @@ func findAndConnect(ctx context.Context, h host.Host, rd *drouting.RoutingDiscov
 	}
 }
 
-// mdnsNotifee connects to peers discovered on the LAN.
 type mdnsNotifee struct {
 	h   host.Host
 	ctx context.Context
@@ -100,7 +91,6 @@ func (n *mdnsNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	}
 }
 
-// SetupMDNS starts mDNS LAN discovery. Close the returned service to stop it.
 func SetupMDNS(ctx context.Context, h host.Host) (mdns.Service, error) {
 	svc := mdns.NewMdnsService(h, mdnsServiceTag, &mdnsNotifee{h: h, ctx: ctx})
 	if err := svc.Start(); err != nil {

@@ -28,9 +28,6 @@ func connect(t *testing.T, ctx context.Context, a, b host.Host) {
 	}
 }
 
-// TestTwoNodeRelayDelivery wires two nodes and verifies a packet originating at
-// node 1, addressed to an app connected at node 2, is forwarded over the relay
-// stream and delivered exactly once (even when sent twice).
 func TestTwoNodeRelayDelivery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -60,12 +57,10 @@ func TestTwoNodeRelayDelivery(t *testing.T) {
 		t.Fatalf("manager2: %v", err)
 	}
 
-	// An app peer connected to node 2.
 	appPeer := test.RandPeerIDFatal(t)
 	delivered := make(chan *Packet, 4)
 	m2.AppConnected(appPeer, func(p *Packet) { delivered <- p })
 
-	// Node 1 learns (as presence gossip would teach it) that appPeer is via h2.
 	m1.Router().Upsert(appPeer, h2.ID(), time.Minute)
 
 	id, _ := NewPacketID()
@@ -77,7 +72,6 @@ func TestTwoNodeRelayDelivery(t *testing.T) {
 		Timestamp:   time.Now().UnixMilli(),
 	}
 
-	// Send the same packet twice (simulating multi-path redundancy).
 	if err := m1.Route(pkt); err != nil {
 		t.Fatalf("route 1: %v", err)
 	}
@@ -94,11 +88,9 @@ func TestTwoNodeRelayDelivery(t *testing.T) {
 		t.Fatal("packet was not delivered to the local app")
 	}
 
-	// The duplicate must not produce a second delivery.
 	select {
 	case <-delivered:
 		t.Fatal("duplicate packet was delivered twice (dedup failed)")
 	case <-time.After(500 * time.Millisecond):
-		// expected: no second delivery
 	}
 }

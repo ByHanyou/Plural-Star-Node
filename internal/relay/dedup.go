@@ -8,17 +8,12 @@ import (
 	"time"
 )
 
-// DedupCache suppresses duplicate packets (the same packet arriving via multiple
-// redundant relay paths). It is an in-memory map of packet ID -> arrival time,
-// evicted on a ticker.
 type DedupCache struct {
 	mu  sync.Mutex
 	m   map[[16]byte]time.Time
 	ttl time.Duration
 }
 
-// NewDedupCache starts a cache whose entries are evicted after ttl, swept every
-// evictInterval. The sweeper stops when ctx is cancelled.
 func NewDedupCache(ctx context.Context, ttl, evictInterval time.Duration) *DedupCache {
 	d := &DedupCache{
 		m:   make(map[[16]byte]time.Time),
@@ -28,8 +23,6 @@ func NewDedupCache(ctx context.Context, ttl, evictInterval time.Duration) *Dedup
 	return d
 }
 
-// SeenOrAdd returns true if id was already in the cache (i.e. a duplicate to
-// drop). If id is new, it is recorded and the call returns false.
 func (d *DedupCache) SeenOrAdd(id [16]byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -40,7 +33,6 @@ func (d *DedupCache) SeenOrAdd(id [16]byte) bool {
 	return false
 }
 
-// Len reports the current number of cached IDs (for diagnostics/tests).
 func (d *DedupCache) Len() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

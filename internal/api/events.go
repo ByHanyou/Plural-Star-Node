@@ -2,8 +2,6 @@
 
 package api
 
-// WebSocket event payloads (node -> app). Each has a discriminating "type".
-
 type peerOnlineEvent struct {
 	Type    string `json:"type"`
 	PeerID  string `json:"peer_id"`

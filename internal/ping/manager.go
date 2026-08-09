@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package ping tracks the node's currently connected libp2p peers (other relay
-// nodes) and their round-trip times, for the app-facing /nodes endpoint.
 package ping
 
 import (
@@ -15,19 +13,14 @@ import (
 	pingsvc "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 )
 
-// NodeInfo describes a connected libp2p node.
 type NodeInfo struct {
 	PeerID    string `json:"peer_id"`
 	Multiaddr string `json:"multiaddr"`
 	RTTms     int64  `json:"rtt_ms"`
 }
 
-// EventFunc is invoked when a node connects (connected=true, with measured RTT)
-// or disconnects (connected=false).
 type EventFunc func(peerID peer.ID, rttMs int64, connected bool)
 
-// Manager runs the libp2p ping responder, measures RTT to peers as they
-// connect, and answers /nodes queries.
 type Manager struct {
 	ctx     context.Context
 	h       host.Host
@@ -38,8 +31,6 @@ type Manager struct {
 	rtts map[peer.ID]time.Duration
 }
 
-// NewManager starts the ping service and subscribes to connection events.
-// onEvent may be nil.
 func NewManager(ctx context.Context, h host.Host, onEvent EventFunc) *Manager {
 	m := &Manager{
 		ctx:     ctx,
@@ -54,7 +45,6 @@ func NewManager(ctx context.Context, h host.Host, onEvent EventFunc) *Manager {
 		},
 		DisconnectedF: func(n corenet.Network, c corenet.Conn) {
 			p := c.RemotePeer()
-			// Only treat as a disconnect once no connections remain.
 			if len(n.ConnsToPeer(p)) > 0 {
 				return
 			}
@@ -87,8 +77,6 @@ func (m *Manager) measure(p peer.ID) {
 	}
 }
 
-// Nodes returns all currently connected libp2p nodes with their last-measured
-// RTT (0 if not yet measured).
 func (m *Manager) Nodes() []NodeInfo {
 	peers := m.h.Network().Peers()
 	out := make([]NodeInfo, 0, len(peers))
@@ -109,7 +97,6 @@ func (m *Manager) Nodes() []NodeInfo {
 	return out
 }
 
-// Count returns the number of connected libp2p nodes.
 func (m *Manager) Count() int {
 	return len(m.h.Network().Peers())
 }

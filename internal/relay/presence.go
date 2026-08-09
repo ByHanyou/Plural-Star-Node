@@ -13,8 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// presenceMsg is the JSON gossiped on the presence topic when an app connects,
-// refreshes, or disconnects (tombstone).
 type presenceMsg struct {
 	PeerID     string `json:"peer_id"`
 	ViaNode    string `json:"via_node"`
@@ -23,12 +21,8 @@ type presenceMsg struct {
 	Tombstone  bool   `json:"tombstone,omitempty"`
 }
 
-// PeerEvent is invoked when a remote app peer comes online or goes offline,
-// so higher layers (the API) can notify connected apps.
 type PeerEvent func(peerID, viaNode peer.ID, online bool)
 
-// Presence publishes and consumes presence announcements on a GossipSub topic,
-// keeping the Router up to date.
 type Presence struct {
 	ctx    context.Context
 	self   peer.ID
@@ -39,8 +33,6 @@ type Presence struct {
 	onPeer PeerEvent
 }
 
-// NewPresence joins topicName, starts consuming it into router, and returns a
-// handle for publishing announcements. onPeer may be nil.
 func NewPresence(ctx context.Context, ps *pubsub.PubSub, self peer.ID, topicName string, router *Router, ttl time.Duration, onPeer PeerEvent) (*Presence, error) {
 	topic, err := ps.Join(topicName)
 	if err != nil {
@@ -63,7 +55,6 @@ func NewPresence(ctx context.Context, ps *pubsub.PubSub, self peer.ID, topicName
 	return p, nil
 }
 
-// Announce publishes (or refreshes) presence for a locally connected app peer.
 func (p *Presence) Announce(appPeer peer.ID) error {
 	m := presenceMsg{
 		PeerID:     appPeer.String(),
@@ -74,7 +65,6 @@ func (p *Presence) Announce(appPeer peer.ID) error {
 	return p.publish(m)
 }
 
-// Tombstone publishes an immediate offline announcement for an app peer.
 func (p *Presence) Tombstone(appPeer peer.ID) error {
 	m := presenceMsg{
 		PeerID:    appPeer.String(),
@@ -96,9 +86,8 @@ func (p *Presence) readLoop() {
 	for {
 		msg, err := p.sub.Next(p.ctx)
 		if err != nil {
-			return // ctx cancelled or subscription closed
+			return
 		}
-		// Skip our own announcements; our routing of local apps is authoritative.
 		if msg.ReceivedFrom == p.self {
 			continue
 		}
@@ -130,7 +119,6 @@ func (p *Presence) readLoop() {
 
 func (p *Presence) fire(appPeer, via peer.ID, online bool) {
 	if p.onPeer != nil {
-		// Guard the callback so a slow/buggy consumer can't wedge the read loop.
 		func() {
 			defer func() {
 				if r := recover(); r != nil {

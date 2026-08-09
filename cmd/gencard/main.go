@@ -1,16 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Command gencard creates and signs a NetworkCard for the public directory.
-//
-// Usage:
-//
-//	gencard -key ./node.key -id plural-star-global -name "Plural Star Global" \
-//	        -desc "The main open network" \
-//	        -bootstrap "/ip4/<ip>/tcp/4001/p2p/<peerid>" > card.json
-//
-// The card is signed by the given Ed25519 key (created if absent); its
-// created_by field is that key's peer ID, so anyone can verify authenticity
-// regardless of where the directory is hosted.
 package main
 
 import (

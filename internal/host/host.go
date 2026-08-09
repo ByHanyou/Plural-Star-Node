@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package host builds the go-libp2p host and the node's persistent identity.
 package host
 
 import (
@@ -17,6 +16,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	libp2pnetwork "github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
@@ -27,8 +27,6 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-// LoadOrCreateIdentity returns the Ed25519 private key at path, generating and
-// persisting a new one (0600) if the file is absent.
 func LoadOrCreateIdentity(path string) (crypto.PrivKey, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -56,8 +54,6 @@ func LoadOrCreateIdentity(path string) (crypto.PrivKey, error) {
 	return priv, nil
 }
 
-// New builds a go-libp2p host from the config and identity. psk is the optional
-// 32-byte private-network key; pass nil for public/custom-public networks.
 func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error) {
 	listen, err := parseMultiaddrs(cfg.ListenAddrs)
 	if err != nil {
@@ -65,17 +61,14 @@ func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error)
 	}
 
 	cm, err := connmgr.NewConnManager(
-		cfg.MaxPeers/2, // low watermark
-		cfg.MaxPeers,   // high watermark
+		cfg.MaxPeers/2,
+		cfg.MaxPeers,
 		connmgr.WithGracePeriod(time.Minute),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connection manager: %w", err)
 	}
 
-	// QUIC is incompatible with PSK private networks — go-libp2p returns
-	// "QUIC doesn't support private networks yet" — so private nodes run
-	// TCP-only and drop any QUIC listen addresses.
 	if psk != nil {
 		listen = dropQUIC(listen)
 	}
@@ -92,7 +85,6 @@ func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error)
 		libp2p.EnableRelay(),
 	}
 	if psk == nil {
-		// QUIC only on public / custom-public networks.
 		opts = append(opts, libp2p.Transport(libp2pquic.NewTransport))
 	}
 
@@ -121,8 +113,6 @@ func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error)
 	return h, nil
 }
 
-// NewDHT starts a Kademlia DHT in server mode under the given protocol prefix
-// (e.g. "/plural-star/global") and kicks off its bootstrap routine.
 func NewDHT(ctx context.Context, h host.Host, prefix string) (*dht.IpfsDHT, error) {
 	kdht, err := dht.New(ctx, h,
 		dht.Mode(dht.ModeServer),
@@ -137,19 +127,26 @@ func NewDHT(ctx context.Context, h host.Host, prefix string) (*dht.IpfsDHT, erro
 	return kdht, nil
 }
 
-// ConnectBootstrap dials each bootstrap multiaddr. It returns the number of
-// peers successfully connected and a joined error for any failures; a partial
-// failure is not fatal to the caller.
 func ConnectBootstrap(ctx context.Context, h host.Host, addrs []string) (int, error) {
 	infos, err := ParsePeerAddrs(addrs)
 	if err != nil {
 		return 0, err
 	}
+	return ConnectPeers(ctx, h, infos)
+}
+
+// ConnectPeers dials every target we are not already connected to and reports
+// how many NEW connections were made. Skipping live connections keeps the
+// reconnect loop's count honest and its log quiet while the mesh is healthy.
+func ConnectPeers(ctx context.Context, h host.Host, infos []peer.AddrInfo) (int, error) {
 	connected := 0
 	var firstErr error
 	for _, ai := range infos {
 		if ai.ID == h.ID() {
-			continue // never bootstrap to ourselves (this node may be in the default list)
+			continue
+		}
+		if h.Network().Connectedness(ai.ID) == libp2pnetwork.Connected {
+			continue
 		}
 		dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if cErr := h.Connect(dialCtx, ai); cErr != nil {
@@ -164,7 +161,6 @@ func ConnectBootstrap(ctx context.Context, h host.Host, addrs []string) (int, er
 	return connected, firstErr
 }
 
-// ParsePeerAddrs converts /p2p/-terminated multiaddr strings into AddrInfos.
 func ParsePeerAddrs(addrs []string) ([]peer.AddrInfo, error) {
 	out := make([]peer.AddrInfo, 0, len(addrs))
 	for _, s := range addrs {
@@ -181,8 +177,6 @@ func ParsePeerAddrs(addrs []string) ([]peer.AddrInfo, error) {
 	return out, nil
 }
 
-// dropQUIC removes QUIC listen addresses (used for PSK private networks, where
-// QUIC is unsupported).
 func dropQUIC(addrs []ma.Multiaddr) []ma.Multiaddr {
 	out := make([]ma.Multiaddr, 0, len(addrs))
 	for _, a := range addrs {

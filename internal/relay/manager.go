@@ -18,15 +18,10 @@ import (
 	msgio "github.com/libp2p/go-msgio"
 )
 
-// ErrNoRoute is returned when a packet's recipient is neither connected locally
-// nor present in the routing table.
 var ErrNoRoute = errors.New("recipient not found in routing table")
 
-// DeliverFunc hands a packet to a locally connected app.
 type DeliverFunc func(*Packet)
 
-// Manager wires together the routing table, dedup cache, presence gossip, and
-// the /plural-star/relay/1.0.0 stream handler.
 type Manager struct {
 	ctx      context.Context
 	h        host.Host
@@ -35,46 +30,81 @@ type Manager struct {
 	dedup    *DedupCache
 	presence *Presence
 
+	queue *Queue
+
 	mu         sync.RWMutex
 	localApps  map[peer.ID]DeliverFunc
 	refreshers map[peer.ID]context.CancelFunc
 }
 
-// NewManager builds the relay manager, registers the stream handler, and starts
-// presence gossip on "<gossipPrefix>presence". onPeer (may be nil) is invoked on
-// remote peer online/offline transitions.
 func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefix string, onPeer PeerEvent) (*Manager, error) {
 	router := NewRouter(ctx, RoutingTablePruneTicker)
 	dedup := NewDedupCache(ctx, DedupCacheTTL, DedupCacheEvictInterval)
-	presence, err := NewPresence(ctx, ps, h.ID(), gossipPrefix+"presence", router, PresenceTTL, onPeer)
-	if err != nil {
-		return nil, err
-	}
+	queue := NewQueue(ctx)
 	m := &Manager{
 		ctx:        ctx,
 		h:          h,
 		self:       h.ID(),
 		router:     router,
 		dedup:      dedup,
-		presence:   presence,
+		queue:      queue,
 		localApps:  make(map[peer.ID]DeliverFunc),
 		refreshers: make(map[peer.ID]context.CancelFunc),
 	}
+	wrapped := func(peerID, viaNode peer.ID, online bool) {
+		if online {
+			m.FlushQueued(peerID)
+		}
+		if onPeer != nil {
+			onPeer(peerID, viaNode, online)
+		}
+	}
+	presence, err := NewPresence(ctx, ps, h.ID(), gossipPrefix+"presence", router, PresenceTTL, wrapped)
+	if err != nil {
+		return nil, err
+	}
+	m.presence = presence
 	h.SetStreamHandler(protocol.ID(RelayProtocol), m.handleStream)
 	return m, nil
 }
 
-// Router exposes the routing table (read-only use by the API layer).
 func (m *Manager) Router() *Router { return m.router }
 
-// AppConnected registers a locally connected app peer, announces its presence to
-// the network, and begins refreshing that presence before TTL expiry. deliver is
-// called when a packet arrives for this app.
+// FlushQueued attempts delivery of everything held for recipient. Packets that
+// still cannot be delivered are put back, so nothing is lost by a failed flush.
+func (m *Manager) FlushQueued(recipient peer.ID) {
+	pending := m.queue.Take(recipient)
+	if len(pending) == 0 {
+		return
+	}
+	m.mu.RLock()
+	deliver, isLocal := m.localApps[recipient]
+	m.mu.RUnlock()
+	if isLocal {
+		for _, p := range pending {
+			deliver(p)
+		}
+		return
+	}
+	via, ok := m.router.Lookup(recipient)
+	if !ok || via == m.self {
+		for _, p := range pending {
+			m.queue.Put(recipient, p)
+		}
+		return
+	}
+	for _, p := range pending {
+		if err := m.forwardTo(via, p); err != nil {
+			m.queue.Put(recipient, p)
+		}
+	}
+}
+
 func (m *Manager) AppConnected(appPeer peer.ID, deliver DeliverFunc) {
 	rctx, cancel := context.WithCancel(m.ctx)
 	m.mu.Lock()
 	if old, ok := m.refreshers[appPeer]; ok {
-		old() // replace any prior refresher
+		old()
 	}
 	m.localApps[appPeer] = deliver
 	m.refreshers[appPeer] = cancel
@@ -83,10 +113,10 @@ func (m *Manager) AppConnected(appPeer peer.ID, deliver DeliverFunc) {
 	if err := m.presence.Announce(appPeer); err != nil {
 		log.Printf("relay: announce presence for %s: %v", appPeer, err)
 	}
+	m.FlushQueued(appPeer)
 	go m.refreshLoop(rctx, appPeer)
 }
 
-// AppDisconnected unregisters a local app and publishes a presence tombstone.
 func (m *Manager) AppDisconnected(appPeer peer.ID) {
 	m.mu.Lock()
 	delete(m.localApps, appPeer)
@@ -116,11 +146,9 @@ func (m *Manager) refreshLoop(ctx context.Context, appPeer peer.ID) {
 	}
 }
 
-// Route processes a packet from any source (a local app or another node):
-// dedup, then deliver locally or forward toward the recipient.
 func (m *Manager) Route(p *Packet) error {
 	if m.dedup.SeenOrAdd(p.ID) {
-		return nil // duplicate; drop silently
+		return nil
 	}
 	return m.forwardOrDeliver(p)
 }
@@ -141,11 +169,14 @@ func (m *Manager) forwardOrDeliver(p *Packet) error {
 
 	via, ok := m.router.Lookup(recipient)
 	if !ok || via == m.self {
-		// No live route, or a stale entry pointing back at this node for an app
-		// that is no longer connected locally — don't dial ourselves.
-		return ErrNoRoute
+		m.queue.Put(recipient, p)
+		return nil
 	}
-	return m.forwardTo(via, p)
+	if err := m.forwardTo(via, p); err != nil {
+		m.queue.Put(recipient, p)
+		return nil
+	}
+	return nil
 }
 
 func (m *Manager) forwardTo(via peer.ID, p *Packet) error {

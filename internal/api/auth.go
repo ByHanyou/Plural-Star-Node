@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-// authed wraps a handler with bearer-token authentication.
 func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.checkAuth(r) {
@@ -19,12 +18,7 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// checkAuth accepts the token via the Authorization: Bearer header, or (for
-// WebSocket clients that cannot set headers) via a ?token= query parameter.
 func (s *Server) checkAuth(r *http.Request) bool {
-	// Open mode: an empty api_token means the relay runs without auth, so app
-	// clients can connect to a public node without a token. The relay only ever
-	// sees opaque, end-to-end-encrypted payloads, so this exposes no user data.
 	if s.cfg.APIToken == "" {
 		return true
 	}

@@ -26,7 +26,12 @@ directory_url: ""
 # API server.
 api_host: "127.0.0.1"   # bind address; use 0.0.0.0 to let the app reach this node over the network
 api_port: 7523
-api_token: ""           # empty = open mode (no auth); set a value to require a bearer token
+# api_token gates EVERY endpoint, including the ones apps use (/send, /ws,
+# /rendezvous/*). Apps on the default public network have no token, so a value
+# here does not harden a public node, it shuts the whole network out. Public
+# nodes therefore ignore it: the value is stripped and rewritten to "" on load.
+# Set it only on private / custom_public networks.
+api_token: ""
 
 # libp2p listen addresses.
 listen_addrs:

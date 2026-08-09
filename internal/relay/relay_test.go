@@ -93,5 +93,4 @@ func TestRouterUpsertLookupExpire(t *testing.T) {
 	}
 }
 
-// ensure peer.ID import is used even if test bodies change
 var _ peer.ID
