@@ -52,7 +52,7 @@ func NewServer(cfg *config.Config, configPath string, h host.Host, scope string)
 		scope:      scope,
 		startedAt:  time.Now(),
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(*http.Request) bool { return true },
+			CheckOrigin: originAllowed,
 		},
 		clients: make(map[*wsClient]struct{}),
 		rv:      newRendezvousStore(rendezvousPathFor(configPath)),

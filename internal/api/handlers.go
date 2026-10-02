@@ -173,6 +173,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.operatorOnly(w, r, false) {
+		return
+	}
 	redacted := *s.cfg
 	redacted.APIToken = "***redacted***"
 	writeJSON(w, http.StatusOK, redacted)
@@ -235,6 +238,9 @@ func (s *Server) handleInviteGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+	if !s.operatorOnly(w, r, false) {
+		return
+	}
 	if s.cfg.NetworkMode != config.ModePrivate {
 		writeError(w, http.StatusBadRequest, "invites are only available in private network mode")
 		return
@@ -264,6 +270,9 @@ func (s *Server) handleInviteGenerate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if !s.operatorOnly(w, r, true) {
 		return
 	}
 	var req struct {

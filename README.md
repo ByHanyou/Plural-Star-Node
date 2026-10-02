@@ -71,9 +71,17 @@ go build -o plural-star-node-arm64 ./cmd/node
 
 ## The push gateway (not part of this repo — you don't run it)
 
-Nodes are the only thing operators run. iOS Live Activity updates ("friend fronts on the Island") are delivered by a separate, single-instance **push gateway** operated by the app's developer. It is not distributed with this repo and is **not part of running a node** — hosting a relay on the default network or your own public/private network never involves it. Pushes are cryptographically tied to the official app's bundle ID and the developer's Apple account key, so one gateway serves every install of the official app, on any network. Someone forking the app itself (own bundle ID, own Apple Developer account) would need to build their own push delivery service against Apple's ActivityKit push API.
+Nodes are the only thing operators run. iOS friend notifications and Live Activity updates ("friend fronts on the Island") are delivered by a separate, single-instance **push gateway** operated by the app's developer. It is not distributed with this repo and is **not part of running a node** — hosting a relay on the default network or your own public/private network never involves it. Pushes are cryptographically tied to the official app's bundle ID and the developer's Apple account key, so one gateway serves every install of the official app, on any network. Someone forking the app itself (own bundle ID, own Apple Developer account) would need to build their own push delivery service against Apple's ActivityKit and APNs.
 
-What the gateway operator can see (disclosed for transparency, same spirit as the relay's privacy model): which peer IDs subscribed to Live Activity updates for which friend peer IDs, device push tokens, and the coarse fronter names senders choose to announce for the Island (Live Activity pushes are plaintext to Apple by design — the app never sends full front details down this lane). The gateway stores no messages, no sync data, and no relationships beyond that subscription list.
+The gateway exists because Apple will not let one person's phone wake another's. Two phones are rarely awake at the same moment, so alongside sending pushes it also keeps a short-lived cache of each system's announced front, which a friend's app can read back when it next opens. Without that, a front change made while your friend's phone was asleep would simply be lost.
+
+What the gateway operator can see (disclosed for transparency, same spirit as the relay's privacy model):
+
+- **Device push tokens**, and which peer IDs asked to watch which friend peer IDs.
+- **The coarse fronter names** a system chooses to announce, plus its system name and the front's start time. Pushes are plaintext to Apple by design; the app never sends full front details down this lane, and only announces names that *every* friend it is currently sharing with is permitted to see.
+- **A reader list per announcement** — the peer IDs the announcing system authorises to read that cached front back. This is a relationship list, and it is stored: read access is the announcer's to grant, never the reader's to claim, so an entry naming nobody is readable by nobody.
+
+The gateway stores no messages, no sync data, and no system content beyond the above. It cannot read anything on the relay network, which is end-to-end encrypted and never passes through it. Each new announcement replaces the previous cached one, a cached front is dropped after 30 days without a new announcement, and registrations lapse when unused. Live Activity lines use a much shorter window than that, so a Lock Screen never shows a front old enough to be misleading.
 
 ## Configuration
 
