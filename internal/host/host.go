@@ -5,9 +5,11 @@ package host
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ByHanyou/Plural-Star-Node/internal/config"
@@ -36,7 +38,7 @@ func LoadOrCreateIdentity(path string) (crypto.PrivKey, error) {
 		}
 		return priv, nil
 	}
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read keypair %q: %w", path, err)
 	}
 
@@ -63,7 +65,7 @@ func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error)
 	cm, err := connmgr.NewConnManager(
 		cfg.MaxPeers/2,
 		cfg.MaxPeers,
-		connmgr.WithGracePeriod(time.Minute),
+		connmgr.WithGracePeriod(cfg.Limits.ConnmgrGracePeriod.Std()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connection manager: %w", err)
@@ -86,6 +88,8 @@ func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error)
 	}
 	if psk == nil {
 		opts = append(opts, libp2p.Transport(libp2pquic.NewTransport))
+	} else {
+		opts = append(opts, libp2p.PrivateNetwork(psk))
 	}
 
 	if cfg.RelayEnabled {
@@ -100,10 +104,6 @@ func New(cfg *config.Config, priv crypto.PrivKey, psk []byte) (host.Host, error)
 		opts = append(opts, libp2p.AddrsFactory(func([]ma.Multiaddr) []ma.Multiaddr {
 			return announce
 		}))
-	}
-
-	if psk != nil {
-		opts = append(opts, libp2p.PrivateNetwork(psk))
 	}
 
 	h, err := libp2p.New(opts...)
@@ -127,20 +127,14 @@ func NewDHT(ctx context.Context, h host.Host, prefix string) (*dht.IpfsDHT, erro
 	return kdht, nil
 }
 
-func ConnectBootstrap(ctx context.Context, h host.Host, addrs []string) (int, error) {
-	infos, err := ParsePeerAddrs(addrs)
-	if err != nil {
-		return 0, err
-	}
-	return ConnectPeers(ctx, h, infos)
-}
-
-// ConnectPeers dials every target we are not already connected to and reports
-// how many NEW connections were made. Skipping live connections keeps the
-// reconnect loop's count honest and its log quiet while the mesh is healthy.
-func ConnectPeers(ctx context.Context, h host.Host, infos []peer.AddrInfo) (int, error) {
-	connected := 0
-	var firstErr error
+func ConnectPeers(ctx context.Context, h host.Host, infos []peer.AddrInfo, concurrency int, timeout time.Duration) (int, error) {
+	var (
+		mu        sync.Mutex
+		wg        sync.WaitGroup
+		connected int
+		firstErr  error
+	)
+	sem := make(chan struct{}, concurrency)
 	for _, ai := range infos {
 		if ai.ID == h.ID() {
 			continue
@@ -148,16 +142,26 @@ func ConnectPeers(ctx context.Context, h host.Host, infos []peer.AddrInfo) (int,
 		if h.Network().Connectedness(ai.ID) == libp2pnetwork.Connected {
 			continue
 		}
-		dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if cErr := h.Connect(dialCtx, ai); cErr != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("connect %s: %w", ai.ID, cErr)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ai peer.AddrInfo) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			dialCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			cErr := h.Connect(dialCtx, ai)
+			mu.Lock()
+			defer mu.Unlock()
+			if cErr != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("connect %s: %w", ai.ID, cErr)
+				}
+				return
 			}
-		} else {
 			connected++
-		}
-		cancel()
+		}(ai)
 	}
+	wg.Wait()
 	return connected, firstErr
 }
 

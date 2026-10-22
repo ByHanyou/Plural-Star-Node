@@ -3,33 +3,35 @@
 package api
 
 import (
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/ByHanyou/Plural-Star-Node/internal/config"
 
 	"github.com/gorilla/websocket"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const (
-	wsWriteWait  = 10 * time.Second
-	wsPongWait   = 60 * time.Second
-	wsPingPeriod = 50 * time.Second
-	wsSendBuffer = 64
-)
+const dropLogInterval = time.Minute
 
 type wsClient struct {
-	conn    *websocket.Conn
-	appPeer peer.ID
-	send    chan []byte
-	mu      sync.Mutex
-	closed  bool
+	lim         config.Limits
+	conn        *websocket.Conn
+	appPeer     peer.ID
+	send        chan []byte
+	mu          sync.Mutex
+	closed      bool
+	dropped     int64
+	lastDropLog time.Time
 }
 
-func newWSClient(conn *websocket.Conn, appPeer peer.ID) *wsClient {
+func newWSClient(conn *websocket.Conn, appPeer peer.ID, lim config.Limits) *wsClient {
 	return &wsClient{
 		conn:    conn,
 		appPeer: appPeer,
-		send:    make(chan []byte, wsSendBuffer),
+		lim:     lim,
+		send:    make(chan []byte, lim.WSSendBuffer),
 	}
 }
 
@@ -42,6 +44,11 @@ func (c *wsClient) trySend(b []byte) {
 	select {
 	case c.send <- b:
 	default:
+		c.dropped++
+		if c.lastDropLog.IsZero() || time.Since(c.lastDropLog) >= dropLogInterval {
+			slog.Warn("api: websocket send buffer full, event dropped", "peer", c.appPeer, "dropped", c.dropped)
+			c.lastDropLog = time.Now()
+		}
 	}
 }
 
@@ -56,7 +63,7 @@ func (c *wsClient) close() {
 }
 
 func (c *wsClient) writePump() {
-	ticker := time.NewTicker(wsPingPeriod)
+	ticker := time.NewTicker(c.lim.WSPingPeriod.Std())
 	defer func() {
 		ticker.Stop()
 		_ = c.conn.Close()
@@ -64,7 +71,7 @@ func (c *wsClient) writePump() {
 	for {
 		select {
 		case msg, ok := <-c.send:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.lim.WSWriteWait.Std()))
 			if !ok {
 				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
@@ -73,7 +80,7 @@ func (c *wsClient) writePump() {
 				return
 			}
 		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.lim.WSWriteWait.Std()))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -83,9 +90,10 @@ func (c *wsClient) writePump() {
 
 func (c *wsClient) readPump(onClose func()) {
 	defer onClose()
-	_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	c.conn.SetReadLimit(int64(c.lim.WSMaxMessageBytes))
+	_ = c.conn.SetReadDeadline(time.Now().Add(c.lim.WSPongWait.Std()))
 	c.conn.SetPongHandler(func(string) error {
-		return c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return c.conn.SetReadDeadline(time.Now().Add(c.lim.WSPongWait.Std()))
 	})
 	for {
 		if _, _, err := c.conn.ReadMessage(); err != nil {

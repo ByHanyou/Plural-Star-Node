@@ -4,11 +4,12 @@ package relay
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/ByHanyou/Plural-Star-Node/internal/config"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -18,11 +19,19 @@ import (
 	msgio "github.com/libp2p/go-msgio"
 )
 
-var ErrNoRoute = errors.New("recipient not found in routing table")
+type Outcome string
+
+const (
+	OutcomeDelivered Outcome = "delivered"
+	OutcomeForwarded Outcome = "forwarded"
+	OutcomeHeld      Outcome = "held"
+	OutcomeDuplicate Outcome = "duplicate"
+)
 
 type DeliverFunc func(*Packet)
 
 type Manager struct {
+	lim      config.Limits
 	ctx      context.Context
 	h        host.Host
 	self     peer.ID
@@ -37,11 +46,18 @@ type Manager struct {
 	refreshers map[peer.ID]context.CancelFunc
 }
 
-func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefix string, onPeer PeerEvent) (*Manager, error) {
-	router := NewRouter(ctx, RoutingTablePruneTicker)
-	dedup := NewDedupCache(ctx, DedupCacheTTL, DedupCacheEvictInterval)
-	queue := NewQueue(ctx)
+func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefix string, lim config.Limits, onPeer PeerEvent) (*Manager, error) {
+	router := NewRouter(ctx, lim.RoutingPruneInterval.Std())
+	dedup := NewDedupCache(ctx, lim.DedupCacheTTL.Std(), lim.DedupEvictInterval.Std())
+	queue := NewQueue(ctx, QueueLimits{
+		EntryTTL:      lim.QueueEntryTTL.Std(),
+		MaxSenders:    lim.QueueMaxSenders,
+		MaxRecipients: lim.QueueMaxRecipients,
+		MaxBytes:      int64(lim.QueueMaxBytes),
+		SweepInterval: lim.QueueSweepInterval.Std(),
+	})
 	m := &Manager{
+		lim:        lim,
 		ctx:        ctx,
 		h:          h,
 		self:       h.ID(),
@@ -59,7 +75,7 @@ func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefi
 			onPeer(peerID, viaNode, online)
 		}
 	}
-	presence, err := NewPresence(ctx, ps, h.ID(), gossipPrefix+"presence", router, PresenceTTL, wrapped)
+	presence, err := NewPresence(ctx, ps, h.ID(), gossipPrefix+"presence", router, lim.PresenceTTL.Std(), lim.MaxPresenceTTL.Std(), wrapped)
 	if err != nil {
 		return nil, err
 	}
@@ -70,13 +86,14 @@ func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefi
 
 func (m *Manager) Router() *Router { return m.router }
 
-// FlushQueued attempts delivery of everything held for recipient. Packets that
-// still cannot be delivered are put back, so nothing is lost by a failed flush.
+func (m *Manager) hold(recipient peer.ID, p *Packet) {
+	if !m.queue.Put(recipient, p) {
+		slog.Warn("relay: packet dropped, hold queue full", "recipient", recipient)
+	}
+}
+
 func (m *Manager) FlushQueued(recipient peer.ID) {
 	pending := m.queue.Take(recipient)
-	if len(pending) == 0 {
-		return
-	}
 	m.mu.RLock()
 	deliver, isLocal := m.localApps[recipient]
 	m.mu.RUnlock()
@@ -89,14 +106,12 @@ func (m *Manager) FlushQueued(recipient peer.ID) {
 	via, ok := m.router.Lookup(recipient)
 	if !ok || via == m.self {
 		for _, p := range pending {
-			m.queue.Put(recipient, p)
+			m.hold(recipient, p)
 		}
 		return
 	}
 	for _, p := range pending {
-		if err := m.forwardTo(via, p); err != nil {
-			m.queue.Put(recipient, p)
-		}
+		m.forwardOrHold(recipient, via, p)
 	}
 }
 
@@ -111,7 +126,7 @@ func (m *Manager) AppConnected(appPeer peer.ID, deliver DeliverFunc) {
 	m.mu.Unlock()
 
 	if err := m.presence.Announce(appPeer); err != nil {
-		log.Printf("relay: announce presence for %s: %v", appPeer, err)
+		slog.Warn("relay: announce presence failed", "peer", appPeer, "err", err)
 	}
 	m.FlushQueued(appPeer)
 	go m.refreshLoop(rctx, appPeer)
@@ -127,12 +142,12 @@ func (m *Manager) AppDisconnected(appPeer peer.ID) {
 	m.mu.Unlock()
 
 	if err := m.presence.Tombstone(appPeer); err != nil {
-		log.Printf("relay: tombstone presence for %s: %v", appPeer, err)
+		slog.Warn("relay: tombstone presence failed", "peer", appPeer, "err", err)
 	}
 }
 
 func (m *Manager) refreshLoop(ctx context.Context, appPeer peer.ID) {
-	ticker := time.NewTicker(PresenceRefreshInterval)
+	ticker := time.NewTicker(m.lim.PresenceRefreshInterval.Std())
 	defer ticker.Stop()
 	for {
 		select {
@@ -140,23 +155,23 @@ func (m *Manager) refreshLoop(ctx context.Context, appPeer peer.ID) {
 			return
 		case <-ticker.C:
 			if err := m.presence.Announce(appPeer); err != nil {
-				log.Printf("relay: refresh presence for %s: %v", appPeer, err)
+				slog.Warn("relay: refresh presence failed", "peer", appPeer, "err", err)
 			}
 		}
 	}
 }
 
-func (m *Manager) Route(p *Packet) error {
+func (m *Manager) Route(p *Packet) (Outcome, error) {
 	if m.dedup.SeenOrAdd(p.ID) {
-		return nil
+		return OutcomeDuplicate, nil
 	}
 	return m.forwardOrDeliver(p)
 }
 
-func (m *Manager) forwardOrDeliver(p *Packet) error {
+func (m *Manager) forwardOrDeliver(p *Packet) (Outcome, error) {
 	recipient, err := peer.IDFromBytes(p.RecipientID)
 	if err != nil {
-		return fmt.Errorf("invalid recipient id: %w", err)
+		return "", fmt.Errorf("invalid recipient id: %w", err)
 	}
 
 	m.mu.RLock()
@@ -164,19 +179,27 @@ func (m *Manager) forwardOrDeliver(p *Packet) error {
 	m.mu.RUnlock()
 	if isLocal {
 		deliver(p)
-		return nil
+		return OutcomeDelivered, nil
 	}
 
 	via, ok := m.router.Lookup(recipient)
 	if !ok || via == m.self {
-		m.queue.Put(recipient, p)
-		return nil
+		m.hold(recipient, p)
+		return OutcomeHeld, nil
 	}
+	if !m.forwardOrHold(recipient, via, p) {
+		return OutcomeHeld, nil
+	}
+	return OutcomeForwarded, nil
+}
+
+func (m *Manager) forwardOrHold(recipient, via peer.ID, p *Packet) bool {
 	if err := m.forwardTo(via, p); err != nil {
-		m.queue.Put(recipient, p)
-		return nil
+		slog.Debug("relay: forward failed, holding packet", "recipient", recipient, "via", via, "err", err)
+		m.hold(recipient, p)
+		return false
 	}
-	return nil
+	return true
 }
 
 func (m *Manager) forwardTo(via peer.ID, p *Packet) error {
@@ -184,7 +207,7 @@ func (m *Manager) forwardTo(via peer.ID, p *Packet) error {
 	if err != nil {
 		return fmt.Errorf("marshal packet: %w", err)
 	}
-	streamCtx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
+	streamCtx, cancel := context.WithTimeout(m.ctx, m.lim.RelayStreamTimeout.Std())
 	defer cancel()
 	s, err := m.h.NewStream(streamCtx, via, protocol.ID(RelayProtocol))
 	if err != nil {
@@ -201,19 +224,21 @@ func (m *Manager) forwardTo(via peer.ID, p *Packet) error {
 
 func (m *Manager) handleStream(s corenet.Stream) {
 	defer s.Close()
-	r := msgio.NewReader(s)
+	r := msgio.NewReaderSize(s, m.lim.MaxPacketBytes)
 	b, err := r.ReadMsg()
 	if err != nil {
+		slog.Debug("relay: reading packet failed", "peer", s.Conn().RemotePeer(), "err", err)
 		_ = s.Reset()
 		return
 	}
 	p, err := UnmarshalPacket(b)
 	r.ReleaseMsg(b)
 	if err != nil {
+		slog.Debug("relay: malformed packet", "peer", s.Conn().RemotePeer(), "err", err)
 		_ = s.Reset()
 		return
 	}
-	if err := m.Route(p); err != nil && !errors.Is(err, ErrNoRoute) {
-		log.Printf("relay: route packet: %v", err)
+	if _, err := m.Route(p); err != nil {
+		slog.Warn("relay: route packet failed", "err", err)
 	}
 }

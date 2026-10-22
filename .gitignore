@@ -1,11 +1,10 @@
-# Build output
 /plural-star-node
 /plural-star-node-*
 /plural-star-node.exe
+/node.exe
 /gencard
 /dist/
 
-# Runtime-generated, host-specific, and secret files
 config.yaml
 node.key
 network.psk
@@ -13,8 +12,6 @@ networks.db
 known_peers.json
 *.key
 
-# Push gateway — operator-only, not distributed. Source, secrets, and runtime
-# files all stay local. NEVER commit.
 /cmd/gateway/
 *.p8
 gateway.yaml
@@ -25,9 +22,7 @@ rendezvous.json
 gateway
 gateway.exe
 
-# OS / editor noise
 .DS_Store
 *.swp
 
-# Local host helper (not part of the project)
 /cmd.exe

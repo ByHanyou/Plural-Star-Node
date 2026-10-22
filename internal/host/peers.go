@@ -4,6 +4,8 @@ package host
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -11,28 +13,12 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
+	corenet "github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-// PeerMemory is a small on-disk record of node peers this node has actually
-// held a libp2p connection to, kept so the reconnect loop has more to dial
-// than the static bootstrap list. Without it the bootstrap node is a single
-// point of failure twice over: a node that restarts while the bootstrap is
-// down comes up with zero peers and stays stranded even though the rest of
-// the mesh is alive, and the bootstrap node itself dials nobody after a
-// reboot because its own list contains only its own address. With it, every
-// node redials the mesh it last saw, so the network heals from whichever
-// side comes back first and nobody has to restart anything.
-//
-// This is purely local dial-target state. Nothing here changes the wire
-// protocol, adds a message, or shares new data with anyone.
-const (
-	peerMemoryMaxPeers     = 64
-	peerMemoryMaxAddrs     = 8
-	peerMemoryTTL          = 30 * 24 * time.Hour
-	peerMemoryFilePerms    = 0o600
-)
+const peerMemoryFilePerms = 0o600
 
 type rememberedPeer struct {
 	ID       string   `json:"id"`
@@ -41,26 +27,30 @@ type rememberedPeer struct {
 }
 
 type PeerMemory struct {
-	mu    sync.Mutex
-	path  string
-	peers map[peer.ID]rememberedPeer
-	dirty bool
+	maxPeers int
+	maxAddrs int
+	ttl      time.Duration
+	mu       sync.Mutex
+	path     string
+	peers    map[peer.ID]rememberedPeer
+	dirty    bool
 }
 
-// LoadPeerMemory reads the remembered-peer file at path. A missing or
-// unreadable file is a fresh start, never an error: this cache is an
-// optimisation and must not be able to stop a node from booting.
-func LoadPeerMemory(path string) *PeerMemory {
-	pm := &PeerMemory{path: path, peers: map[peer.ID]rememberedPeer{}}
+func LoadPeerMemory(path string, maxPeers, maxAddrs int, ttl time.Duration) *PeerMemory {
+	pm := &PeerMemory{path: path, peers: map[peer.ID]rememberedPeer{}, maxPeers: maxPeers, maxAddrs: maxAddrs, ttl: ttl}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("peers: reading remembered peers failed", "path", path, "err", err)
+		}
 		return pm
 	}
 	var list []rememberedPeer
 	if err := json.Unmarshal(data, &list); err != nil {
+		slog.Warn("peers: remembered peers unreadable", "path", path, "err", err)
 		return pm
 	}
-	cutoff := time.Now().Add(-peerMemoryTTL).Unix()
+	cutoff := time.Now().Add(-pm.ttl).Unix()
 	for _, rp := range list {
 		id, dErr := peer.Decode(rp.ID)
 		if dErr != nil || rp.LastSeen < cutoff || len(rp.Addrs) == 0 {
@@ -71,10 +61,6 @@ func LoadPeerMemory(path string) *PeerMemory {
 	return pm
 }
 
-// Snapshot records every peer the host is connected to right now, with the
-// addresses those connections actually used. Relay-circuit addresses are
-// skipped: a path through another node is exactly what will not exist when
-// that node is the one being redialled.
 func (pm *PeerMemory) Snapshot(h host.Host) {
 	now := time.Now().Unix()
 	pm.mu.Lock()
@@ -82,6 +68,9 @@ func (pm *PeerMemory) Snapshot(h host.Host) {
 	for _, c := range h.Network().Conns() {
 		id := c.RemotePeer()
 		if id == h.ID() {
+			continue
+		}
+		if c.Stat().Direction != corenet.DirOutbound {
 			continue
 		}
 		addr := c.RemoteMultiaddr()
@@ -94,7 +83,7 @@ func (pm *PeerMemory) Snapshot(h host.Host) {
 		rp.LastSeen = now
 		merged := []string{s}
 		for _, a := range rp.Addrs {
-			if a != s && len(merged) < peerMemoryMaxAddrs {
+			if a != s && len(merged) < pm.maxAddrs {
 				merged = append(merged, a)
 			}
 		}
@@ -104,16 +93,13 @@ func (pm *PeerMemory) Snapshot(h host.Host) {
 	}
 }
 
-// Save writes the memory to disk if anything changed since the last save,
-// trimming expired entries and capping the file at the most recently seen
-// peers. Failures are swallowed for the same reason load failures are.
 func (pm *PeerMemory) Save() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	if !pm.dirty {
 		return
 	}
-	cutoff := time.Now().Add(-peerMemoryTTL).Unix()
+	cutoff := time.Now().Add(-pm.ttl).Unix()
 	list := make([]rememberedPeer, 0, len(pm.peers))
 	for id, rp := range pm.peers {
 		if rp.LastSeen < cutoff {
@@ -122,29 +108,36 @@ func (pm *PeerMemory) Save() {
 		}
 		list = append(list, rp)
 	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].LastSeen != list[j].LastSeen {
-			return list[i].LastSeen > list[j].LastSeen
+	sortByRecency(list)
+	if len(list) > pm.maxPeers {
+		list = list[:pm.maxPeers]
+		kept := make(map[peer.ID]rememberedPeer, len(list))
+		for _, rp := range list {
+			if id, err := peer.Decode(rp.ID); err == nil {
+				kept[id] = rp
+			}
 		}
-		return list[i].ID < list[j].ID
-	})
-	if len(list) > peerMemoryMaxPeers {
-		list = list[:peerMemoryMaxPeers]
+		pm.peers = kept
 	}
 	out, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
+		slog.Warn("peers: encode failed", "path", pm.path, "err", err)
 		return
 	}
-	if wErr := os.WriteFile(pm.path, out, peerMemoryFilePerms); wErr == nil {
-		pm.dirty = false
+	tmp := pm.path + ".tmp"
+	if wErr := os.WriteFile(tmp, out, peerMemoryFilePerms); wErr != nil {
+		slog.Warn("peers: save failed", "path", pm.path, "err", wErr)
+		return
 	}
+	if rErr := os.Rename(tmp, pm.path); rErr != nil {
+		slog.Warn("peers: save failed", "path", pm.path, "err", rErr)
+		return
+	}
+	pm.dirty = false
 }
 
-// DialTargets returns remembered peers as dialable AddrInfos, excluding self
-// and anything expired. Order is most recently seen first so the cap in the
-// caller lands on the freshest addresses.
 func (pm *PeerMemory) DialTargets(self peer.ID) []peer.AddrInfo {
-	cutoff := time.Now().Add(-peerMemoryTTL).Unix()
+	cutoff := time.Now().Add(-pm.ttl).Unix()
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	list := make([]rememberedPeer, 0, len(pm.peers))
@@ -154,12 +147,7 @@ func (pm *PeerMemory) DialTargets(self peer.ID) []peer.AddrInfo {
 		}
 		list = append(list, rp)
 	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].LastSeen != list[j].LastSeen {
-			return list[i].LastSeen > list[j].LastSeen
-		}
-		return list[i].ID < list[j].ID
-	})
+	sortByRecency(list)
 	out := make([]peer.AddrInfo, 0, len(list))
 	for _, rp := range list {
 		id, err := peer.Decode(rp.ID)
@@ -181,26 +169,26 @@ func (pm *PeerMemory) DialTargets(self peer.ID) []peer.AddrInfo {
 	return out
 }
 
-// MergeTargets folds remembered peers into a bootstrap-derived target list,
-// deduplicating by peer ID. Bootstrap entries come first and win the dedupe:
-// their addresses are operator-vouched DNS names, while remembered addresses
-// may be stale NAT observations.
+func sortByRecency(list []rememberedPeer) {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].LastSeen != list[j].LastSeen {
+			return list[i].LastSeen > list[j].LastSeen
+		}
+		return list[i].ID < list[j].ID
+	})
+}
+
 func MergeTargets(bootstrap []peer.AddrInfo, remembered []peer.AddrInfo) []peer.AddrInfo {
 	seen := make(map[peer.ID]bool, len(bootstrap)+len(remembered))
 	out := make([]peer.AddrInfo, 0, len(bootstrap)+len(remembered))
-	for _, ai := range bootstrap {
-		if seen[ai.ID] {
-			continue
+	for _, group := range [][]peer.AddrInfo{bootstrap, remembered} {
+		for _, ai := range group {
+			if seen[ai.ID] {
+				continue
+			}
+			seen[ai.ID] = true
+			out = append(out, ai)
 		}
-		seen[ai.ID] = true
-		out = append(out, ai)
-	}
-	for _, ai := range remembered {
-		if seen[ai.ID] {
-			continue
-		}
-		seen[ai.ID] = true
-		out = append(out, ai)
 	}
 	return out
 }

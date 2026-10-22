@@ -1,49 +1,73 @@
-# Plural Star Node — example configuration
-# Copy to config.yaml and edit, or let the node generate one on first run.
-
-# Node identity. Ed25519 key, generated on first run if absent.
 keypair_path: "./node.key"
 
-# Network mode: "public" | "private" | "custom_public"
 network_mode: "public"
 
-# Private network only. 32-byte PSK file, required if network_mode = private.
 psk_path: "./network.psk"
 
-# Custom public network only. Namespacing string, required if network_mode = custom_public.
 network_id: ""
 
-# Bootstrap peers (multiaddr list).
-# Public mode: well-known Plural Star bootstrap nodes are used as fallback if empty.
-# Private / custom_public: at least one peer is required.
 bootstrap_peers: []
 
-# Optional: hosted public-network directory URL (public / custom_public modes).
-# Fetched on startup as a bootstrap for network-card discovery. Leave empty to
-# rely on gossip discovery only, or to use the compiled-in default if one is set.
 directory_url: ""
 
-# API server.
-api_host: "127.0.0.1"   # bind address; use 0.0.0.0 to let the app reach this node over the network
+api_host: "127.0.0.1"
 api_port: 7523
-# api_token gates EVERY endpoint, including the ones apps use (/send, /ws,
-# /rendezvous/*). Apps on the default public network have no token, so a value
-# here does not harden a public node, it shuts the whole network out. Public
-# nodes therefore ignore it: the value is stripped and rewritten to "" on load.
-# Set it only on private / custom_public networks.
 api_token: ""
 
-# libp2p listen addresses.
 listen_addrs:
   - "/ip4/0.0.0.0/tcp/4001"
   - "/ip4/0.0.0.0/udp/4001/quic-v1"
 
-# Optional: announce external address if behind static NAT.
 announce_addrs: []
 
-# Whether this node forwards traffic for others.
 relay_enabled: true
 
-# Connection limits.
 max_peers: 200
 max_app_connections: 5000
+
+log_level: "info"
+
+limits:
+  reconnect_interval: "90s"
+  connection_monitor_interval: "5m"
+  dial_concurrency: 8
+  dial_timeout: "15s"
+  connmgr_grace_period: "1m"
+  ping_timeout: "10s"
+  discovery_interval: "60s"
+  discovery_dial_timeout: "20s"
+  directory_fetch_timeout: "15s"
+  peer_memory_max_peers: 64
+  peer_memory_max_addrs: 8
+  peer_memory_ttl: "720h"
+
+  max_packet_bytes: 2097152
+  relay_stream_timeout: "15s"
+  presence_ttl: "90s"
+  max_presence_ttl: "10m"
+  presence_refresh_interval: "45s"
+  dedup_cache_ttl: "10s"
+  dedup_evict_interval: "5s"
+  routing_prune_interval: "30s"
+  queue_entry_ttl: "168h"
+  queue_max_senders: 500
+  queue_max_recipients: 10000
+  queue_max_bytes: 67108864
+  queue_sweep_interval: "30m"
+
+  rendezvous_max_entries: 20000
+  rendezvous_max_namespace_len: 128
+  rendezvous_max_record_bytes: 8192
+  rendezvous_max_ttl: "1h"
+  rendezvous_reannounce_interval: "5m"
+  ws_write_wait: "10s"
+  ws_pong_wait: "60s"
+  ws_ping_period: "50s"
+  ws_send_buffer: 64
+  ws_max_message_bytes: 65536
+  http_read_header_timeout: "15s"
+  http_idle_timeout: "2m"
+  shutdown_timeout: "5s"
+  max_send_body_bytes: 1048576
+  max_invite_body_bytes: 65536
+  max_rendezvous_body_bytes: 65536

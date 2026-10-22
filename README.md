@@ -2,7 +2,7 @@
 
 A standalone, decentralized, relay-only peer-to-peer node for Plural Star's Friend & Syncing System. It runs on PCs and Raspberry Pis as a background service and forms the relay infrastructure that Plural Star app clients connect to.
 
-This is a separate program from the Plural Star app. It is built directly on [go-libp2p](https://github.com/libp2p/go-libp2p) and treats relay nodes as hostile infrastructure by design: a node sees only peer IDs and opaque, end-to-end-encrypted blobs. It never stores user data, messages, relationships, or sync content.
+This is a separate program from the Plural Star app. It is built directly on [go-libp2p](https://github.com/libp2p/go-libp2p) and treats relay nodes as hostile infrastructure by design: a node sees only peer IDs and opaque, end-to-end-encrypted blobs. It never writes user data, messages, relationships, or sync content to disk.
 
 ## Related projects & links
 
@@ -16,7 +16,7 @@ This is a separate program from the Plural Star app. It is built directly on [go
   </a>
 </p>
 
-- **Plural Star** (the app this node serves) — [Website](https://byhanyou.github.io/Plural-Star/) · [GitHub](https://github.com/ByHanyou/Plural-Star) · [App Store](https://apps.apple.com/in/app/plural-star/id6763964266) · [Google Play](https://play.google.com/store/apps/details?id=com.pluralspace.app)
+- **Plural Star** (the app this node serves) - [Website](https://byhanyou.github.io/Plural-Star/) · [GitHub](https://github.com/ByHanyou/Plural-Star) · [App Store](https://apps.apple.com/in/app/plural-star/id6763964266) · [Google Play](https://play.google.com/store/apps/details?id=com.pluralspace.app)
 - **Plural Star Desktop** - [GitHub](https://github.com/ByHanyou/Plural-Star-Desktop) · [Latest release](https://github.com/ByHanyou/Plural-Star-Desktop/releases/latest)
 - **Community** - [Reddit](https://www.reddit.com/r/PluralStar/)
 
@@ -29,7 +29,7 @@ This is a separate program from the Plural Star app. It is built directly on [go
 
 ## Requirements
 
-- Go 1.21+ — the module declares `go 1.25.7`, so on an older (but toolchain-aware) Go, `go build` downloads the `go1.25.7` toolchain automatically.
+- Go 1.21+: the module declares `go 1.25.7`, so on an older (but toolchain-aware) Go, `go build` downloads the `go1.25.7` toolchain automatically.
 
 ## Build and run
 
@@ -43,17 +43,18 @@ plural-star-node.exe --config config.yaml
 Linux / macOS:
 
 ```sh
-go build -o plural-star-node ./cmd/node
+go build -ldflags "-X github.com/ByHanyou/Plural-Star-Node/internal/version.Version=$(git describe --tags --always --dirty)" -o plural-star-node ./cmd/node
 ./plural-star-node --config config.yaml
 ```
 
+`make build` and the `go build` line above stamp the version from `git describe` into the binary. `plural-star-node -version` prints it and `/health` reports it as `version`; a binary built without the `-ldflags` flag (the Windows line above) reports `dev`.
 On first run with no config, the node writes a default `config.yaml` and generates an Ed25519 identity (`node.key`). The API starts open, which is correct for a public node.
 
 `api_token` gates **every** endpoint, including the ones apps use, and apps on the default public network do not send one. Setting it on a public node therefore does not harden the node, it shuts the whole network out, and nothing reads the file until the next start, so the breakage only shows up after a reboot. Public nodes ignore it: the value is stripped and rewritten to `""` on load, with a line in the log saying so. Use `api_token` on `private` / `custom_public` networks only, and configure the same token in your Plural Star app.
 
 ### Cross-compile
 
-`make dist` builds fully static binaries for all release targets into `dist/`: linux amd64, linux arm64 (Pi 4/5), linux armv7 (Pi 3), darwin arm64, windows amd64. Without `make`, set the target and build directly.
+`make dist` builds fully static, version-stamped binaries for all release targets into `dist/`: linux amd64, linux arm64 (Pi 4/5), linux armv7 (Pi 3), darwin arm64, windows amd64. Without `make`, set the target and build directly.
 
 Linux / macOS:
 
@@ -69,9 +70,9 @@ set GOARCH=arm64
 go build -o plural-star-node-arm64 ./cmd/node
 ```
 
-## The push gateway (not part of this repo — you don't run it)
+## The push gateway (not part of this repo, you don't run it)
 
-Nodes are the only thing operators run. iOS friend notifications and Live Activity updates ("friend fronts on the Island") are delivered by a separate, single-instance **push gateway** operated by the app's developer. It is not distributed with this repo and is **not part of running a node** — hosting a relay on the default network or your own public/private network never involves it. Pushes are cryptographically tied to the official app's bundle ID and the developer's Apple account key, so one gateway serves every install of the official app, on any network. Someone forking the app itself (own bundle ID, own Apple Developer account) would need to build their own push delivery service against Apple's ActivityKit and APNs.
+Nodes are the only thing operators run. iOS friend notifications and Live Activity updates ("friend fronts on the Island") are delivered by a separate, single-instance **push gateway** operated by the app's developer. It is not distributed with this repo and is **not part of running a node**: hosting a relay on the default network or your own public/private network never involves it. Pushes are cryptographically tied to the official app's bundle ID and the developer's Apple account key, so one gateway serves every install of the official app, on any network. Someone forking the app itself (own bundle ID, own Apple Developer account) would need to build their own push delivery service against Apple's ActivityKit and APNs.
 
 The gateway exists because Apple will not let one person's phone wake another's. Two phones are rarely awake at the same moment, so alongside sending pushes it also keeps a short-lived cache of each system's announced front, which a friend's app can read back when it next opens. Without that, a front change made while your friend's phone was asleep would simply be lost.
 
@@ -79,7 +80,7 @@ What the gateway operator can see (disclosed for transparency, same spirit as th
 
 - **Device push tokens**, and which peer IDs asked to watch which friend peer IDs.
 - **The coarse fronter names** a system chooses to announce, plus its system name and the front's start time. Pushes are plaintext to Apple by design; the app never sends full front details down this lane, and only announces names that *every* friend it is currently sharing with is permitted to see.
-- **A reader list per announcement** — the peer IDs the announcing system authorises to read that cached front back. This is a relationship list, and it is stored: read access is the announcer's to grant, never the reader's to claim, so an entry naming nobody is readable by nobody.
+- **A reader list per announcement**: the peer IDs the announcing system authorises to read that cached front back. This is a relationship list, and it is stored: read access is the announcer's to grant, never the reader's to claim, so an entry naming nobody is readable by nobody.
 
 The gateway stores no messages, no sync data, and no system content beyond the above. It cannot read anything on the relay network, which is end-to-end encrypted and never passes through it. Each new announcement replaces the previous cached one, a cached front is dropped after 30 days without a new announcement, and registrations lapse when unused. Live Activity lines use a much shorter window than that, so a Lock Screen never shows a front old enough to be misleading.
 
@@ -98,12 +99,14 @@ See `config.yaml.example`. Key fields:
 | `listen_addrs` | libp2p listen multiaddrs |
 | `relay_enabled` | whether this node forwards traffic for others |
 | `max_peers` / `max_app_connections` | connection limits |
+| `log_level` | `debug`, `info` (default), `warn` or `error`; log lines go to stderr |
+| `limits.*` | every timeout, interval, cap and quota the node enforces: reconnect and discovery timing, relay queue size and retention, rendezvous caps, WebSocket and HTTP timing, request body sizes. Durations are strings with a unit (`"90s"`, `"5m"`, `"720h"`); any key left out keeps its default; `config.yaml.example` lists every key at its default |
 
 ### Network modes
 
-- **Public** — open join via Kad-DHT + GossipSub under namespace `plural-star/global`. If no bootstrap peers are set in config, the built-in defaults are used.
-- **Private** — PSK-enforced via libp2p `pnet`. Nodes without the matching key cannot complete the handshake. No DHT or public discovery; bootstrap peers must be specified. **Runs TCP-only:** go-libp2p's QUIC transport does not support private networks, so QUIC is disabled automatically when a PSK is set.
-- **Custom public** — open join scoped under `plural-star/<network_id>`, separate from the global network.
+- **Public**: open join via Kad-DHT + GossipSub under namespace `plural-star/global`. If no bootstrap peers are set in config, the built-in defaults are used.
+- **Private**: PSK-enforced via libp2p `pnet`. Nodes without the matching key cannot complete the handshake. No DHT or public discovery; bootstrap peers must be specified. **Runs TCP-only:** go-libp2p's QUIC transport does not support private networks, so QUIC is disabled automatically when a PSK is set.
+- **Custom public**: open join scoped under `plural-star/<network_id>`, separate from the global network.
 
 ## API
 
@@ -111,17 +114,21 @@ When `api_token` is set (private / custom_public only), all endpoints require `A
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/health` | Node status, mode, connected node/app counts, uptime |
+| GET | `/health` | Node status, peer ID, mode, network ID, connected node/app counts, uptime, `version` |
 | GET | `/nodes` | Connected libp2p nodes with RTT |
 | GET | `/peers` | Known online app peers (from routing table) |
 | GET | `/networks` | Known public networks (from discovery cache) |
-| POST | `/send` | Send a packet: `{recipient_peer_id, payload(base64), packet_id?}` → `{status:"queued", packet_id}` (best-effort). For multi-path redundancy, reuse the returned `packet_id` when sending the same packet to your other connected nodes, so duplicates are deduped end-to-end. |
-| POST | `/invite/generate` | Generate a private-network invite (private mode only) |
-| POST | `/invite/accept` | Accept an invite; writes PSK + bootstrap, requires restart |
-| GET | `/config` | Current config (API token redacted) |
+| POST | `/send` | Send a packet: `{sender_peer_id, recipient_peer_id, payload(base64), packet_id?}` → `{status, packet_id}`. `status` says what the node did: `delivered` (an app with that peer id is connected to this node; 200), `forwarded` (handed to the recipient's node; 202), `held` (no route right now, kept for later delivery; 202) or `duplicate` (this `packet_id` was routed before; 200). Reuse the returned `packet_id` when sending the same packet through other nodes so duplicates are deduped end-to-end |
+| POST | `/invite/generate` | Generate a private-network invite (private mode only). Operator only: needs the `api_token`, or a caller on the local machine when none is set |
+| POST | `/invite/accept` | Accept an invite; writes PSK + bootstrap, requires restart. Operator only (as above) and the body must be sent as `application/json` |
+| GET | `/config` | Current config (secrets redacted). Operator only (as above) |
+| POST | `/rendezvous/register` | Publish a signed, short-lived pairing record under a namespace |
+| GET | `/rendezvous/lookup` | Look up pairing records: `?namespace=<ns>` |
 | GET | `/ws` | WebSocket; pass `?peer_id=<app peer id>` to register |
 
-WebSocket events (node → app), each a JSON object with a `type`: `packet_received`, `peer_online`, `peer_offline`, `node_connected`, `node_disconnected`, `error`.
+WebSocket events (node → app), each a JSON object with a `type`: `packet_received`, `peer_online`, `peer_offline`, `node_connected`, `node_disconnected`.
+
+Every error body is `{"error": "<text>", "code": "<MACHINE_CODE>"}`; the generic codes are `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `CONFLICT`, `TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, `RATE_LIMITED`, `INTERNAL` and `UNAVAILABLE`, and any other HTTP status is reported as `HTTP_<status>`.
 
 ## Running as a service
 
@@ -130,12 +137,14 @@ WebSocket events (node → app), each a JSON object with a `type`: `packet_recei
 A hardened systemd unit template is in `scripts/plural-star-node.service`:
 
 ```sh
-sudo useradd --system --home /var/lib/plural-star-node plural-star
+sudo useradd --system --home-dir /var/lib/plural-star-node --shell /usr/sbin/nologin plural-star
 sudo install -Dm755 plural-star-node /usr/local/bin/plural-star-node
 sudo install -Dm644 scripts/plural-star-node.service /etc/systemd/system/plural-star-node.service
-sudo mkdir -p /etc/plural-star-node /var/lib/plural-star-node
+sudo install -d -o plural-star -g plural-star -m 750 /etc/plural-star-node /var/lib/plural-star-node
 sudo systemctl enable --now plural-star-node
 ```
+
+Both directories must be owned by `plural-star`: the first start writes `config.yaml` at the config path, `known_peers.json` and `rendezvous.json` are written next to it, and `node.key`, `network.psk` and `networks.db` resolve relative to the working directory (`WorkingDirectory` in the unit) unless the config uses absolute paths.
 
 ### Windows
 
@@ -154,7 +163,7 @@ A public bootstrap node must be reachable from the internet at a stable address.
 
 **1. Forward the port.** On your router, forward **TCP and UDP 4001** and **TCP 7523** to the node's LAN IP.
 
-**2. Announce your public address.** Set `announce_addrs` in `config.yaml` to your public IP — this is what other nodes use to reach you, and it also stops the node advertising local-only addresses:
+**2. Announce your public address.** Set `announce_addrs` in `config.yaml` to your public IP. This is what other nodes use to reach you, and it also stops the node advertising local-only addresses:
 
 ```yaml
 announce_addrs:
@@ -170,7 +179,7 @@ Find your public IPv4 with `curl -4 ifconfig.me` (Windows: `curl.exe -4 ifconfig
 curl --user yourname.dedyn.io:<your-token> "https://update.dedyn.io/?myipv4=<your-ip>&myipv6=preserve"
 ```
 
-Keep it updated automatically every 10 minutes — Linux/macOS (cron):
+Keep it updated automatically every 10 minutes. Linux/macOS (cron):
 
 ```sh
 */10 * * * * curl -4 --user yourname.dedyn.io:<your-token> "https://update.dedyn.io/?myipv6=preserve"
@@ -190,11 +199,11 @@ announce_addrs:
   - "/dns4/yourname.dedyn.io/udp/4001/quic-v1"
 ```
 
-Restart the node. Your stable bootstrap address — for other nodes' `bootstrap_peers`, a directory card, or `DefaultBootstrapPeers` — is then `/dns4/yourname.dedyn.io/tcp/4001/p2p/<your-peer-id>`.
+Restart the node. Your stable bootstrap address (for other nodes' `bootstrap_peers`, a directory card, or `DefaultBootstrapPeers`) is then `/dns4/yourname.dedyn.io/tcp/4001/p2p/<your-peer-id>`.
 
 ## Hosting the public directory
 
-The public-network directory is a static JSON file — an array of signed network cards — so it can be hosted anywhere static, including **GitHub Pages**. Nodes fetch it on startup (set `directory_url` in config), verify each card's signature, cache valid ones, and serve them on `/networks`. Networks also propagate node-to-node over gossip.
+The public-network directory is a static JSON file (an array of signed network cards), so it can be hosted anywhere static, including **GitHub Pages**. Nodes fetch it on startup (set `directory_url` in config), verify each card's signature, cache valid ones, and serve them on `/networks`. Networks also propagate node-to-node over gossip.
 
 Create and sign a card with the bundled tool (signs with an Ed25519 key; `created_by` is that key's peer ID):
 
@@ -208,33 +217,43 @@ Assemble the directory as a JSON array and publish it (e.g. commit `directory.js
 directory_url: "https://<user>.github.io/<repo>/directory.json"
 ```
 
-Keep the signing key (`directory.key`) safe — it is the authority for any card published under its `created_by` identity.
+Keep the signing key (`directory.key`) safe: it is the authority for any card published under its `created_by` identity.
 
 ## Architecture
 
 ```
 cmd/node            entry point, subsystem wiring, signal handling
+cmd/gencard         signs network cards for a hosted directory
 internal/config     config load/validate + first-run generation
-internal/host       go-libp2p host, identity, DHT
+internal/host       go-libp2p host, identity, DHT, peer memory
 internal/network    network modes, mDNS + DHT discovery, invites,
                     signed network cards, bbolt cache
-internal/relay      packet, dedup cache, routing table, presence gossip,
+internal/gossip     typed GossipSub topics, malformed-message counting
+internal/relay      packet, dedup cache, routing table, presence and
+                    rendezvous gossip, in-memory queue,
                     /plural-star/relay/1.0.0 stream handler
 internal/ping       connected-node tracking + RTT (libp2p ping)
-internal/api        REST + WebSocket server, bearer auth
+internal/api        REST + WebSocket server, bearer auth, rendezvous
+internal/ttlmap     expiring map behind the routing table, dedup cache
+                    and rendezvous store
+internal/version    build version, stamped by -ldflags
 ```
 
 ## Security model
 
-Relay nodes are untrusted. They route on `RecipientID` and never inspect `Payload`. End-to-end encryption is the app's responsibility — the node treats payloads as opaque bytes. Node-to-node transport is encrypted by libp2p (Noise). The local API is bound to `127.0.0.1`; if you expose it remotely you are responsible for TLS via a reverse proxy.
+Relay nodes are untrusted. They route on `RecipientID` and never inspect `Payload`. End-to-end encryption is the app's responsibility: the node treats payloads as opaque bytes. Node-to-node transport is encrypted by libp2p (Noise). The local API is bound to `127.0.0.1`; if you expose it remotely you are responsible for TLS via a reverse proxy.
 
 ## Privacy & data
 
 The node is relay-only and **stores no personal data**. It handles:
 
-- **libp2p peer IDs** — of connected app clients, kept in memory (routing table, presence) and never written to disk. A peer ID is a random public-key identifier, not account or contact information. Peer IDs of other **nodes** (server infrastructure, not people) are cached on disk with their public listen addresses so the mesh can redial itself after an outage.
-- **Encrypted payloads** — passed through opaquely; never inspected, logged, or stored. End-to-end encryption is performed by the app.
+- **libp2p peer IDs**: of connected app clients, kept in memory (routing table, presence) and never written to disk. A peer ID is a random public-key identifier, not account or contact information. Peer IDs of other **nodes** (server infrastructure, not people) are cached on disk with their public listen addresses so the mesh can redial itself after an outage.
+- **Encrypted payloads**: passed through opaquely; never inspected, logged, or written to disk. A packet for an app that is offline is held in memory until the app reconnects, for at most `limits.queue_entry_ttl` (7 days by default), and is lost if the node restarts. End-to-end encryption is performed by the app.
 
-The only files a node writes are operational and contain no user data: its own keypair (`node.key`), config (`config.yaml`), an optional private-network PSK (`network.psk`), a cache of public *network cards* (`networks.db`), a cache of recently connected node peers (`known_peers.json`), and persisted pairing-directory records (`rendezvous.json` — short-lived, signed, already-public records apps publish to be found by a friend code). The local API binds to `127.0.0.1`; on private and custom_public networks it is gated by a bearer token.
+The only files a node writes are operational and contain no user data: its own keypair (`node.key`), config (`config.yaml`), an optional private-network PSK (`network.psk`), a cache of public *network cards* (`networks.db`), a cache of recently connected node peers (`known_peers.json`), and persisted pairing-directory records (`rendezvous.json`: short-lived, signed, already-public records apps publish to be found by a friend code). The local API binds to `127.0.0.1`; on private and custom_public networks it is gated by a bearer token.
 
 Because the node neither collects nor stores personal data, it does not by itself require a formal privacy policy. Operators who run **public bootstrap nodes** may still want to publish a short transparency statement (what their node logs, retention, jurisdiction). A full privacy policy belongs with the **Plural Star app**, which handles user content and is subject to app-store requirements.
+
+## License
+
+[AGPL-3.0-or-later](LICENSE). Third-party notices are in `THIRD-PARTY-NOTICES.md`.

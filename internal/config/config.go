@@ -3,9 +3,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,7 +18,18 @@ const (
 	ModeCustomPublic = "custom_public"
 )
 
-const DefaultAPIPort = 7523
+const (
+	DefaultAPIPort     = 7523
+	DefaultKeypairPath = "./node.key"
+	DefaultPSKPath     = "./network.psk"
+)
+
+const (
+	LogLevelDebug = "debug"
+	LogLevelInfo  = "info"
+	LogLevelWarn  = "warn"
+	LogLevelError = "error"
+)
 
 type Config struct {
 	KeypairPath string `yaml:"keypair_path" json:"keypair_path"`
@@ -42,13 +55,17 @@ type Config struct {
 
 	MaxPeers          int `yaml:"max_peers" json:"max_peers"`
 	MaxAppConnections int `yaml:"max_app_connections" json:"max_app_connections"`
+
+	LogLevel string `yaml:"log_level" json:"log_level"`
+
+	Limits Limits `yaml:"limits" json:"limits"`
 }
 
 func Default() *Config {
 	return &Config{
-		KeypairPath:    "./node.key",
+		KeypairPath:    DefaultKeypairPath,
 		NetworkMode:    ModePublic,
-		PSKPath:        "./network.psk",
+		PSKPath:        DefaultPSKPath,
 		NetworkID:      "",
 		BootstrapPeers: []string{},
 		DirectoryURL:   "",
@@ -63,13 +80,15 @@ func Default() *Config {
 		RelayEnabled:      true,
 		MaxPeers:          200,
 		MaxAppConnections: 5000,
+		LogLevel:          LogLevelInfo,
+		Limits:            DefaultLimits(),
 	}
 }
 
 func Load(path string) (cfg *Config, firstRun bool, err error) {
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
-		if !os.IsNotExist(readErr) {
+		if !errors.Is(readErr, os.ErrNotExist) {
 			return nil, false, fmt.Errorf("read config %q: %w", path, readErr)
 		}
 		cfg = Default()
@@ -87,16 +106,9 @@ func Load(path string) (cfg *Config, firstRun bool, err error) {
 		return nil, false, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
-	// A node on the default public network exists to serve app users who have
-	// no token and never will, so every endpoint an app touches is behind the
-	// same auth gate. An api_token here therefore does not secure the node, it
-	// shuts the whole network out, and because nothing reads the file until the
-	// next start the damage stays invisible until a reboot. Strip it, say so,
-	// and write the file back so it cannot come back a third time. Private and
-	// custom_public networks are operator-run and still honour a token.
 	if cfg.NetworkMode == ModePublic && cfg.APIToken != "" {
 		cfg.APIToken = ""
-		log.Printf("config: api_token ignored and removed from %s. A public node must stay open or it locks out every app on the default network.", path)
+		slog.Warn("config: api_token ignored and removed; a public node must stay open or it locks out every app on the default network", "path", path)
 		if err := Save(cfg, path); err != nil {
 			return nil, false, fmt.Errorf("clear api_token in %q: %w", path, err)
 		}
@@ -105,7 +117,7 @@ func Load(path string) (cfg *Config, firstRun bool, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, false, err
 	}
-	return cfg, firstRun, nil
+	return cfg, false, nil
 }
 
 func Save(cfg *Config, path string) error {
@@ -113,7 +125,11 @@ func Save(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(path, out, 0o600)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (c *Config) Validate() error {
@@ -130,10 +146,16 @@ func (c *Config) Validate() error {
 		if c.NetworkID == "" {
 			return fmt.Errorf("network_mode=custom_public requires network_id")
 		}
+		if len(c.BootstrapPeers) == 0 {
+			return fmt.Errorf("network_mode=custom_public requires at least one bootstrap_peers entry")
+		}
 	default:
 		return fmt.Errorf("invalid network_mode %q (want public, private, or custom_public)", c.NetworkMode)
 	}
 
+	if c.KeypairPath == "" {
+		return fmt.Errorf("keypair_path is required")
+	}
 	if c.APIPort <= 0 || c.APIPort > 65535 {
 		return fmt.Errorf("api_port %d out of range", c.APIPort)
 	}
@@ -146,5 +168,16 @@ func (c *Config) Validate() error {
 	if c.MaxAppConnections <= 0 {
 		return fmt.Errorf("max_app_connections must be positive")
 	}
-	return nil
+	if !ValidLogLevel(c.LogLevel) {
+		return fmt.Errorf("invalid log_level %q (want debug, info, warn, or error)", c.LogLevel)
+	}
+	return c.Limits.Validate()
+}
+
+func ValidLogLevel(level string) bool {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError:
+		return true
+	}
+	return false
 }

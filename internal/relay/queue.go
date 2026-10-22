@@ -10,57 +10,71 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const (
-	// QueueEntryTTL is how long an undeliverable packet is held before it is dropped.
-	QueueEntryTTL = 7 * 24 * time.Hour
-	// QueueMaxSenders caps how many distinct senders may hold a slot for one recipient.
-	QueueMaxSenders = 500
-	// QueueSweepInterval is how often expired entries are pruned.
-	QueueSweepInterval = 30 * time.Minute
-)
+type QueueLimits struct {
+	EntryTTL      time.Duration
+	MaxSenders    int
+	MaxRecipients int
+	MaxBytes      int64
+	SweepInterval time.Duration
+}
 
 type queuedPacket struct {
-	pkt *Packet
-	at  time.Time
+	pkt  *Packet
+	at   time.Time
+	size int64
 }
 
-// Queue holds the NEWEST undeliverable packet per (recipient, sender) pair.
-// A newer packet from the same sender replaces the older one — recipients get
-// current state on reconnect, never a replay of a backlog.
-//
-// Payloads are sealed end-to-end by the apps, so the node stores ciphertext it
-// cannot read.
 type Queue struct {
+	lim   QueueLimits
 	mu    sync.Mutex
 	items map[peer.ID]map[string]queuedPacket
+	bytes int64
 }
 
-func NewQueue(ctx context.Context) *Queue {
-	q := &Queue{items: make(map[peer.ID]map[string]queuedPacket)}
+func NewQueue(ctx context.Context, lim QueueLimits) *Queue {
+	q := &Queue{lim: lim, items: make(map[peer.ID]map[string]queuedPacket)}
 	go q.sweepLoop(ctx)
 	return q
 }
 
-// Put stores p for recipient, replacing any earlier packet from the same sender.
-func (q *Queue) Put(recipient peer.ID, p *Packet) {
+func packetSize(p *Packet) int64 {
+	return int64(len(p.ID) + len(p.SenderID) + len(p.RecipientID) + len(p.Payload) + 8)
+}
+
+func (q *Queue) Put(recipient peer.ID, p *Packet) bool {
 	if p == nil {
-		return
+		return false
 	}
 	sender := string(p.SenderID)
+	size := packetSize(p)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	bucket, ok := q.items[recipient]
 	if !ok {
+		if len(q.items) >= q.lim.MaxRecipients {
+			return false
+		}
 		bucket = make(map[string]queuedPacket)
+	}
+	old, exists := bucket[sender]
+	if !exists && len(bucket) >= q.lim.MaxSenders {
+		return false
+	}
+	var freed int64
+	if exists {
+		freed = old.size
+	}
+	if q.bytes-freed+size > q.lim.MaxBytes {
+		return false
+	}
+	if !ok {
 		q.items[recipient] = bucket
 	}
-	if _, exists := bucket[sender]; !exists && len(bucket) >= QueueMaxSenders {
-		return
-	}
-	bucket[sender] = queuedPacket{pkt: p, at: time.Now()}
+	q.bytes += size - freed
+	bucket[sender] = queuedPacket{pkt: p, at: time.Now(), size: size}
+	return true
 }
 
-// Take removes and returns everything queued for recipient.
 func (q *Queue) Take(recipient peer.ID) []*Packet {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -70,8 +84,9 @@ func (q *Queue) Take(recipient peer.ID) []*Packet {
 	}
 	delete(q.items, recipient)
 	out := make([]*Packet, 0, len(bucket))
-	cutoff := time.Now().Add(-QueueEntryTTL)
+	cutoff := time.Now().Add(-q.lim.EntryTTL)
 	for _, entry := range bucket {
+		q.bytes -= entry.size
 		if entry.at.Before(cutoff) {
 			continue
 		}
@@ -80,15 +95,14 @@ func (q *Queue) Take(recipient peer.ID) []*Packet {
 	return out
 }
 
-// Len reports how many packets are held for recipient.
-func (q *Queue) Len(recipient peer.ID) int {
+func (q *Queue) Bytes() int64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.items[recipient])
+	return q.bytes
 }
 
 func (q *Queue) sweepLoop(ctx context.Context) {
-	ticker := time.NewTicker(QueueSweepInterval)
+	ticker := time.NewTicker(q.lim.SweepInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -101,12 +115,13 @@ func (q *Queue) sweepLoop(ctx context.Context) {
 }
 
 func (q *Queue) sweep() {
-	cutoff := time.Now().Add(-QueueEntryTTL)
+	cutoff := time.Now().Add(-q.lim.EntryTTL)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for recipient, bucket := range q.items {
 		for sender, entry := range bucket {
 			if entry.at.Before(cutoff) {
+				q.bytes -= entry.size
 				delete(bucket, sender)
 			}
 		}
