@@ -94,7 +94,7 @@ See `config.yaml.example`. Key fields:
 | `psk_path` | 32-byte pre-shared key file (required for `private`) |
 | `network_id` | namespacing string (required for `custom_public`) |
 | `bootstrap_peers` | multiaddr list; required for `private`/`custom_public` |
-| `api_host` | API bind address; `127.0.0.1` (default, local only) or `0.0.0.0` to allow the app to connect over the network |
+| `api_host` | API bind address; `127.0.0.1` by default. Keep the API private and expose it through an HTTPS reverse proxy for remote apps. |
 | `api_port` / `api_token` | API port and bearer token |
 | `listen_addrs` | libp2p listen multiaddrs |
 | `relay_enabled` | whether this node forwards traffic for others |
@@ -110,23 +110,22 @@ See `config.yaml.example`. Key fields:
 
 ## API
 
-When `api_token` is set (private / custom_public only), all endpoints require `Authorization: Bearer <api_token>` (WebSocket clients may instead pass `?token=<api_token>`). On a public node the token is always empty and every endpoint is open.
+When `api_token` is set (private / custom_public only), all endpoints require `Authorization: Bearer <api_token>`, including WebSocket upgrades.
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Node status, peer ID, mode, network ID, connected node/app counts, uptime, `version` |
 | GET | `/nodes` | Connected libp2p nodes with RTT |
-| GET | `/peers` | Known online app peers (from routing table) |
 | GET | `/networks` | Known public networks (from discovery cache) |
-| POST | `/send` | Send a packet: `{sender_peer_id, recipient_peer_id, payload(base64), packet_id?}` → `{status, packet_id}`. `status` says what the node did: `delivered` (an app with that peer id is connected to this node; 200), `forwarded` (handed to the recipient's node; 202), `held` (no route right now, kept for later delivery; 202) or `duplicate` (this `packet_id` was routed before; 200). Reuse the returned `packet_id` when sending the same packet through other nodes so duplicates are deduped end-to-end |
+| POST | `/send` | Submit a packet with `sender_peer_id`, `recipient_peer_id`, base64 `payload`, optional `packet_id`, and optional `ephemeral` to skip offline storage. Requires `X-Relay-Session` for the sender. A successful submission returns HTTP 202 with `status: queued` and `packet_id`. |
 | POST | `/invite/generate` | Generate a private-network invite (private mode only). Operator only: needs the `api_token`, or a caller on the local machine when none is set |
 | POST | `/invite/accept` | Accept an invite; writes PSK + bootstrap, requires restart. Operator only (as above) and the body must be sent as `application/json` |
 | GET | `/config` | Current config (secrets redacted). Operator only (as above) |
 | POST | `/rendezvous/register` | Publish a signed, short-lived pairing record under a namespace |
 | GET | `/rendezvous/lookup` | Look up pairing records: `?namespace=<ns>` |
-| GET | `/ws` | WebSocket; pass `?peer_id=<app peer id>` to register |
+| GET | `/ws` | Authenticate a WebSocket session using `?peer_id=<app peer id>` and a signed challenge. |
 
-WebSocket events (node → app), each a JSON object with a `type`: `packet_received`, `peer_online`, `peer_offline`, `node_connected`, `node_disconnected`.
+Upon receiving `auth_challenge`, sign the UTF-8 string `plural-star:relay-auth:v1:` followed by the challenge nonce using the PeerID private key. Reply with `auth_response` and a base64 `signature`. The `auth_ready` event contains the `session` for `X-Relay-Session`, valid while the socket stays connected. Authenticated sockets receive `packet_received`, `node_connected`, and `node_disconnected` events.
 
 Every error body is `{"error": "<text>", "code": "<MACHINE_CODE>"}`; the generic codes are `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `CONFLICT`, `TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, `RATE_LIMITED`, `INTERNAL` and `UNAVAILABLE`, and any other HTTP status is reported as `HTTP_<status>`.
 
@@ -161,7 +160,7 @@ Or create a Task Scheduler task that runs `plural-star-node.exe --config config.
 
 A public bootstrap node must be reachable from the internet at a stable address.
 
-**1. Forward the port.** On your router, forward **TCP and UDP 4001** and **TCP 7523** to the node's LAN IP.
+**1. Forward the port.** On your router, forward **TCP and UDP 4001** to the node's LAN IP. For remote apps, serve HTTPS and WSS on **TCP 443** and proxy the app routes to the private API listener. Keep `/config` and `/invite/*` off the public proxy.
 
 **2. Announce your public address.** Set `announce_addrs` in `config.yaml` to your public IP. This is what other nodes use to reach you, and it also stops the node advertising local-only addresses:
 

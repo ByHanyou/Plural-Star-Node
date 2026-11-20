@@ -87,6 +87,9 @@ func NewManager(ctx context.Context, h host.Host, ps *pubsub.PubSub, gossipPrefi
 func (m *Manager) Router() *Router { return m.router }
 
 func (m *Manager) hold(recipient peer.ID, p *Packet) {
+	if p.Ephemeral {
+		return
+	}
 	if !m.queue.Put(recipient, p) {
 		slog.Warn("relay: packet dropped, hold queue full", "recipient", recipient)
 	}
@@ -195,7 +198,7 @@ func (m *Manager) forwardOrDeliver(p *Packet) (Outcome, error) {
 
 func (m *Manager) forwardOrHold(recipient, via peer.ID, p *Packet) bool {
 	if err := m.forwardTo(via, p); err != nil {
-		slog.Debug("relay: forward failed, holding packet", "recipient", recipient, "via", via, "err", err)
+		slog.Debug("relay: forward failed", "recipient", recipient, "via", via, "err", err)
 		m.hold(recipient, p)
 		return false
 	}

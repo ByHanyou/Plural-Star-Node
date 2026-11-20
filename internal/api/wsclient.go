@@ -19,6 +19,7 @@ type wsClient struct {
 	lim         config.Limits
 	conn        *websocket.Conn
 	appPeer     peer.ID
+	session     string
 	send        chan []byte
 	mu          sync.Mutex
 	closed      bool
@@ -26,10 +27,11 @@ type wsClient struct {
 	lastDropLog time.Time
 }
 
-func newWSClient(conn *websocket.Conn, appPeer peer.ID, lim config.Limits) *wsClient {
+func newWSClient(conn *websocket.Conn, appPeer peer.ID, session string, lim config.Limits) *wsClient {
 	return &wsClient{
 		conn:    conn,
 		appPeer: appPeer,
+		session: session,
 		lim:     lim,
 		send:    make(chan []byte, lim.WSSendBuffer),
 	}
